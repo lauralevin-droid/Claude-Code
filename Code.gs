@@ -37,7 +37,7 @@ function handleOAuthCallback(code) {
   var props = PropertiesService.getScriptProperties();
   var clientId     = props.getProperty('WRIKE_CLIENT_ID')     || '';
   var clientSecret = props.getProperty('WRIKE_CLIENT_SECRET') || '';
-  var redirectUri  = ScriptApp.getService().getUrl();
+  var redirectUri  = props.getProperty('WRIKE_REDIRECT_URI')  || ScriptApp.getService().getUrl();
 
   var response;
   try {
@@ -93,21 +93,23 @@ function getRedirectUri() {
 
 // Save Client ID + Secret and return the Wrike authorization URL.
 // The caller should redirect window.location.href (not open a popup).
-function saveCredentialsAndGetAuthUrl(clientId, clientSecret) {
+function saveCredentialsAndGetAuthUrl(clientId, clientSecret, redirectUri) {
   if (!clientId || !clientSecret) return { error: 'Both Client ID and Client Secret are required.' };
+  if (!redirectUri) return { error: 'Redirect URI is required.' };
+
   var props = PropertiesService.getScriptProperties();
   props.setProperty('WRIKE_CLIENT_ID',     clientId.trim());
   props.setProperty('WRIKE_CLIENT_SECRET', clientSecret.trim());
+  props.setProperty('WRIKE_REDIRECT_URI',  redirectUri.trim());
 
-  var redirectUri = ScriptApp.getService().getUrl();
   var authUrl = 'https://login.wrike.com/oauth2/authorize' +
-    '?client_id='     + encodeURIComponent(clientId.trim()) +
+    '?client_id='    + encodeURIComponent(clientId.trim()) +
     '&response_type=code' +
-    '&redirect_uri='  + encodeURIComponent(redirectUri) +
+    '&redirect_uri=' + encodeURIComponent(redirectUri.trim()) +
     '&scope=Default' +
     '&state=wrike_oauth';
 
-  return { authUrl: authUrl, redirectUri: redirectUri };
+  return { authUrl: authUrl, redirectUri: redirectUri.trim() };
 }
 
 function processForm(form) {
@@ -381,9 +383,14 @@ function getFormHtml(connected) {
     '<div id="settings" style="display:' + (connected ? 'none' : 'block') + ';background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:24px">' +
     '<h2 style="margin:0 0 4px">Connect Wrike</h2>' +
     '<p class="sub">In Wrike: <strong>profile avatar → Apps &amp; Integrations → API → Create new app</strong>. ' +
-    'Set the redirect URI to this page\'s URL. Then paste the Client ID and Secret below.</p>' +
+    'Follow the steps below in order.</p>' +
+    '<p style="font-size:13px;font-weight:600;margin:0 0 4px">Step 1 — Copy this Redirect URI into your Wrike app:</p>' +
+    '<div id="uriDisplay" style="font-size:12px;background:#f3f4f6;border:1px solid #d1d5db;padding:8px 10px;border-radius:6px;word-break:break-all;margin-bottom:4px;color:#111827;font-family:monospace"></div>' +
+    '<p style="font-size:11px;color:#6b7280;margin:0 0 12px">In your Wrike app settings → Redirect URIs → paste exactly as shown → Save.</p>' +
+    '<p style="font-size:13px;font-weight:600;margin:0 0 4px">Step 2 — Paste your app credentials:</p>' +
     '<label>Client ID</label><input id="clientId" type="text" placeholder="e.g. XXXXXXXXXXXXXXXX" />' +
     '<label>Client Secret</label><input id="clientSecret" type="password" placeholder="Paste client secret…" />' +
+    '<input id="redirectUri" type="hidden" />' +
     '<button id="authBtn" onclick="authorize()" style="margin-top:16px">Authorize with Wrike ↗</button>' +
     '<p id="authStatus" style="font-size:13px;margin-top:10px;color:#374151"></p>' +
     '</div>';
@@ -423,30 +430,31 @@ function getFormHtml(connected) {
     '<p class="sub" style="margin-bottom:16px">Paste a Wrike brief link to generate a pre-filled email copy doc.</p>' +
     banner + settings + form +
     '<script>' +
+    // Populate the redirect URI display from the actual browser URL (strip query string)
+    'var _uri=window.location.href.split("?")[0].split("#")[0];' +
+    'var _uriEl=document.getElementById("uriDisplay");' +
+    'if(_uriEl){_uriEl.textContent=_uri;document.getElementById("redirectUri").value=_uri;}' +
     'function showSettings(){' +
     '  document.getElementById("settings").style.display="block";' +
     '}' +
     'function authorize(){' +
     '  var id=document.getElementById("clientId").value.trim();' +
     '  var secret=document.getElementById("clientSecret").value.trim();' +
+    '  var uri=document.getElementById("redirectUri").value.trim();' +
     '  if(!id||!secret){alert("Enter both Client ID and Client Secret.");return;}' +
     '  document.getElementById("authBtn").disabled=true;' +
     '  document.getElementById("authStatus").textContent="Saving credentials…";' +
     '  google.script.run' +
     '    .withSuccessHandler(function(r){' +
     '      if(r.error){document.getElementById("authStatus").innerHTML="Error: "+esc(r.error);document.getElementById("authBtn").disabled=false;return;}' +
-    '      document.getElementById("authStatus").innerHTML=' +
-    '        "<strong>Step 2:</strong> Make sure this exact URL is saved as a Redirect URI in your Wrike app:<br>"' +
-    '        +"<code style=\'display:block;background:#f3f4f6;padding:8px;border-radius:4px;margin:8px 0;font-size:12px;word-break:break-all\'>"+esc(r.redirectUri)+"</code>"' +
-    '        +"<small>In Wrike: edit your app → Redirect URIs → paste the URL above → Save.</small><br><br>"' +
-    '        +"<button onclick=\'window.location.href=\""+r.authUrl+"\"\' style=\'width:auto;margin:0;padding:8px 20px\'>Continue to Wrike →</button>";' +
-    '      document.getElementById("authBtn").disabled=false;' +
+    '      document.getElementById("authStatus").textContent="Redirecting to Wrike…";' +
+    '      window.location.href=r.authUrl;' +
     '    })' +
     '    .withFailureHandler(function(e){' +
     '      document.getElementById("authStatus").textContent="Error: "+e.message;' +
     '      document.getElementById("authBtn").disabled=false;' +
     '    })' +
-    '    .saveCredentialsAndGetAuthUrl(id,secret);' +
+    '    .saveCredentialsAndGetAuthUrl(id,secret,uri);' +
     '}' +
     'function generate(){' +
     '  var url=document.getElementById("wrikeUrl").value.trim();' +
@@ -474,6 +482,8 @@ function getFormHtml(connected) {
     '      document.getElementById("btn").disabled=false;' +
     '    })' +
     '    .processForm({wrikeUrl:url,templateType:tmpl});' +
+    // authorize() call needs the redirectUri arg
+    '' +
     '}' +
     'function esc(s){return s?s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"):""}' +
     '<\/script></body></html>';
