@@ -3,13 +3,13 @@
  *
  * Setup (one-time, in the web app):
  *   1. Deploy as Web App (Execute as: Me, Who has access: Anyone within Thrive Market)
- *   2. Open the web app URL → click "Connect Wrike"
+ *   2. Open the web app URL -> click "Connect Wrike"
  *   3. Enter the Client ID and Client Secret from your Wrike app
- *      (wrike.com → profile avatar → Apps & Integrations → API → Create new app)
- *   4. Click "Authorize with Wrike" → approve in the popup → done
+ *      (wrike.com -> profile avatar -> Apps & Integrations -> API -> Create new app)
+ *   4. Click "Authorize with Wrike" -> approve in the popup -> done
  */
 
-// ─── Template IDs (Google Doc IDs from template URLs) ────────────────────────
+// Template IDs (Google Doc IDs from template URLs) -
 
 var TEMPLATES = {
   content:  { label: 'Content Send (non-promo)', id: '1f6uzg9TZCKMwJdSAUC7pmKyBQOYpWzUwUxAsnGGBMDg' },
@@ -19,7 +19,7 @@ var TEMPLATES = {
   pctoff:   { label: '% Off',                    id: '1RuW0XDoT48Hr3Sv08l9IBCtbBf6PZCLC8Gh73I2KxDY' },
 };
 
-// ─── Web App entry points ─────────────────────────────────────────────────────
+// Web App entry points -
 
 function doGet(e) {
   // Wrike OAuth2 callback: ?code=...&state=wrike_oauth
@@ -62,15 +62,15 @@ function handleOAuthCallback(code) {
   if (!data.access_token) {
     return htmlPage('Connection failed',
       '<p class="err">Wrike returned an error: ' + (data.error_description || data.error || response.getContentText()) + '</p>' +
-      '<p><a href="' + ScriptApp.getService().getUrl() + '">← Try again</a></p>');
+      '<p><a href="' + ScriptApp.getService().getUrl() + '">&larr; Try again</a></p>');
   }
 
   props.setProperty('WRIKE_ACCESS_TOKEN',  data.access_token);
   props.setProperty('WRIKE_REFRESH_TOKEN', data.refresh_token || '');
 
   return htmlPage('Wrike connected!',
-    '<p class="ok">✓ Wrike authorization was successful.</p>' +
-    '<p><a href="' + ScriptApp.getService().getUrl() + '">← Open the generator</a></p>');
+    '<p class="ok">Wrike authorization was successful.</p>' +
+    '<p><a href="' + ScriptApp.getService().getUrl() + '">&larr; Open the generator</a></p>');
 }
 
 function htmlPage(title, body) {
@@ -84,10 +84,10 @@ function htmlPage(title, body) {
   ).setTitle(title);
 }
 
-// Returns the redirect URI this script uses — must match exactly in the Wrike app settings
-// ─── Called from the HTML form ────────────────────────────────────────────────
+// Returns the redirect URI this script uses -- must match exactly in the Wrike app settings
+// --- Called from the HTML form -------------------------------------------
 
-// Returns the canonical redirect URI this script will use — always server-side.
+// Returns the canonical redirect URI this script will use -- always server-side.
 function getRedirectUri() {
   return ScriptApp.getService().getUrl();
 }
@@ -128,7 +128,7 @@ function processForm(form) {
     : detectTemplateType(brief.title, brief.description);
 
   var template = TEMPLATES[templateKey] || TEMPLATES.content;
-  var docName  = brief.title || 'Email Copy – ' + wrikeUrl;
+  var docName  = brief.title || 'Email Copy - ' + wrikeUrl;
 
   try {
     var newFile = DriveApp.getFileById(template.id).makeCopy(docName);
@@ -146,7 +146,7 @@ function processForm(form) {
   }
 }
 
-// ─── Wrike token management ───────────────────────────────────────────────────
+// Wrike token management -
 
 function hasWrikeToken() {
   return !!PropertiesService.getScriptProperties().getProperty('WRIKE_ACCESS_TOKEN');
@@ -189,7 +189,7 @@ function refreshWrikeToken() {
   return true;
 }
 
-// ─── Wrike API ────────────────────────────────────────────────────────────────
+// Wrike API -
 
 function fetchWrikeBrief(wrikeUrl) {
   if (!hasWrikeToken()) {
@@ -299,7 +299,7 @@ function extractBriefFromTask(task, sourceUrl) {
   };
 }
 
-// ─── Brief parsing ────────────────────────────────────────────────────────────
+// Brief parsing -
 
 function parseDatesFromTitle(title) {
   var m = title.match(/\b(\d{1,2})[./](\d{1,2})\b/);
@@ -335,7 +335,7 @@ function stripHtml(html) {
   return html.replace(/<[^>]+>/g, ' ').replace(/\s{2,}/g, ' ').trim();
 }
 
-// ─── Template detection & fill ────────────────────────────────────────────────
+// Template detection & fill -
 
 function detectTemplateType(title, description) {
   var text = (title + ' ' + description).toLowerCase();
@@ -369,7 +369,7 @@ function escapeRegex(str) {
   return str.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
 }
 
-// ─── HTML ─────────────────────────────────────────────────────────────────────
+// HTML -
 
 function getFormHtml(connected) {
   var templateOptions = Object.keys(TEMPLATES).map(function(k) {
@@ -383,11 +383,11 @@ function getFormHtml(connected) {
   var settings =
     '<div id="settings" style="display:' + (connected ? 'none' : 'block') + ';background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:24px">' +
     '<h2 style="margin:0 0 4px">Connect Wrike</h2>' +
-    '<p class="sub">In Wrike: <strong>profile avatar → Apps &amp; Integrations → API → Create new app</strong>. ' +
+    '<p class="sub">In Wrike: <strong>profile avatar &rarr; Apps &amp; Integrations &rarr; API &rarr; Create new app</strong>. ' +
     'Follow the steps below in order.</p>' +
     '<p style="font-size:13px;font-weight:600;margin:0 0 4px">Step 1 &mdash; Register this Redirect URI in your Wrike app <em>before</em> clicking Authorize:</p>' +
     '<div id="uriDisplay" style="font-size:12px;background:#f3f4f6;border:1px solid #d1d5db;padding:8px 10px;border-radius:6px;word-break:break-all;margin-bottom:4px;color:#111827;font-family:monospace">Loading...</div>' +
-    '<p style="font-size:11px;color:#6b7280;margin:0 0 12px">Wrike app → Redirect URIs → paste exactly as shown → Save.</p>' +
+    '<p style="font-size:11px;color:#6b7280;margin:0 0 12px">Wrike app &rarr; Redirect URIs &rarr; paste exactly as shown &rarr; Save.</p>' +
     '<p style="font-size:13px;font-weight:600;margin:0 0 4px">Step 2 &mdash; Paste your app credentials:</p>' +
     '<label>Client ID</label><input id="clientId" type="text" placeholder="e.g. XXXXXXXXXXXXXXXX" />' +
     '<label>Client Secret</label><input id="clientSecret" type="password" placeholder="Paste client secret..." />' +
