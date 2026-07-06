@@ -377,28 +377,28 @@ function getFormHtml(connected) {
   }).join('');
 
   var banner = connected
-    ? '<div class="pill ok">✓ Wrike connected &nbsp;·&nbsp; <a href="#" onclick="showSettings();return false;">re-authorize</a></div>'
-    : '<div class="pill warn">Wrike not connected — <a href="#" onclick="showSettings();return false;">connect now</a></div>';
+    ? '<div class="pill ok">Wrike connected &nbsp;&middot;&nbsp; <a href="#" onclick="showSettings();return false;">re-authorize</a></div>'
+    : '<div class="pill warn">Wrike not connected &mdash; <a href="#" onclick="showSettings();return false;">connect now</a></div>';
 
   var settings =
     '<div id="settings" style="display:' + (connected ? 'none' : 'block') + ';background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:24px">' +
     '<h2 style="margin:0 0 4px">Connect Wrike</h2>' +
     '<p class="sub">In Wrike: <strong>profile avatar → Apps &amp; Integrations → API → Create new app</strong>. ' +
     'Follow the steps below in order.</p>' +
-    '<p style="font-size:13px;font-weight:600;margin:0 0 4px">Step 1 — Register this Redirect URI in your Wrike app <em>before</em> clicking Authorize:</p>' +
-    '<div id="uriDisplay" style="font-size:12px;background:#f3f4f6;border:1px solid #d1d5db;padding:8px 10px;border-radius:6px;word-break:break-all;margin-bottom:4px;color:#111827;font-family:monospace">Loading…</div>' +
+    '<p style="font-size:13px;font-weight:600;margin:0 0 4px">Step 1 &mdash; Register this Redirect URI in your Wrike app <em>before</em> clicking Authorize:</p>' +
+    '<div id="uriDisplay" style="font-size:12px;background:#f3f4f6;border:1px solid #d1d5db;padding:8px 10px;border-radius:6px;word-break:break-all;margin-bottom:4px;color:#111827;font-family:monospace">Loading...</div>' +
     '<p style="font-size:11px;color:#6b7280;margin:0 0 12px">Wrike app → Redirect URIs → paste exactly as shown → Save.</p>' +
-    '<p style="font-size:13px;font-weight:600;margin:0 0 4px">Step 2 — Paste your app credentials:</p>' +
+    '<p style="font-size:13px;font-weight:600;margin:0 0 4px">Step 2 &mdash; Paste your app credentials:</p>' +
     '<label>Client ID</label><input id="clientId" type="text" placeholder="e.g. XXXXXXXXXXXXXXXX" />' +
-    '<label>Client Secret</label><input id="clientSecret" type="password" placeholder="Paste client secret…" />' +
-    '<button id="authBtn" onclick="authorize()" style="margin-top:16px">Authorize with Wrike ↗</button>' +
+    '<label>Client Secret</label><input id="clientSecret" type="password" placeholder="Paste client secret..." />' +
+    '<button id="authBtn" onclick="authorize()" style="margin-top:16px">Authorize with Wrike &rarr;</button>' +
     '<p id="authStatus" style="font-size:13px;margin-top:10px;color:#374151"></p>' +
     '</div>';
 
   var form =
     '<div id="main" style="display:' + (connected ? 'block' : 'none') + '">' +
     '<label>Brief <span style="font-weight:400;color:#6b7280">(Wrike link)</span></label>' +
-    '<input id="wrikeUrl" type="url" placeholder="https://www.wrike.com/open.htm?id=…" />' +
+    '<input id="wrikeUrl" type="url" placeholder="https://www.wrike.com/open.htm?id=..." />' +
     '<label>Template <span style="font-weight:400;color:#6b7280">(auto-detected, or override)</span></label>' +
     '<select id="templateType"><option value="auto">Auto-detect from brief</option>' + templateOptions + '</select>' +
     '<button id="btn" onclick="generate()">Generate Copy Doc</button>' +
@@ -443,11 +443,11 @@ function getFormHtml(connected) {
     '  var secret=document.getElementById("clientSecret").value.trim();' +
     '  if(!id||!secret){alert("Enter both Client ID and Client Secret.");return;}' +
     '  document.getElementById("authBtn").disabled=true;' +
-    '  document.getElementById("authStatus").textContent="Saving credentials…";' +
+    '  document.getElementById("authStatus").textContent="Saving credentials...";' +
     '  google.script.run' +
     '    .withSuccessHandler(function(r){' +
     '      if(r.error){document.getElementById("authStatus").innerHTML="Error: "+esc(r.error);document.getElementById("authBtn").disabled=false;return;}' +
-    '      document.getElementById("authStatus").textContent="Redirecting to Wrike…";' +
+    '      document.getElementById("authStatus").textContent="Redirecting to Wrike...";' +
     '      window.location.href=r.authUrl;' +
     '    })' +
     '    .withFailureHandler(function(e){' +
@@ -463,14 +463,14 @@ function getFormHtml(connected) {
     '  document.getElementById("btn").disabled=true;' +
     '  document.getElementById("result").style.display="none";' +
     '  document.getElementById("errMsg").textContent="";' +
-    '  document.getElementById("status").textContent="Fetching brief from Wrike and building your copy doc…";' +
+    '  document.getElementById("status").textContent="Fetching brief from Wrike and building your copy doc...";' +
     '  google.script.run' +
     '    .withSuccessHandler(function(r){' +
     '      document.getElementById("status").textContent="";' +
     '      document.getElementById("btn").disabled=false;' +
     '      if(r.error){document.getElementById("errMsg").textContent=r.error;return;}' +
     '      var d=document.getElementById("result");' +
-    '      d.innerHTML="<a href=\'"+r.url+"\' target=\'_blank\'>↗ Open: "+esc(r.name)+"</a>"' +
+    '      d.innerHTML="<a href=\'"+r.url+"\' target=\'_blank\'>Open: "+esc(r.name)+" &rarr;</a>"' +
     '        +"<div class=\'meta\'>Template: "+esc(r.templateUsed)+"</div>"' +
     '        +(r.briefData&&r.briefData.dates?"<div class=\'meta\'>Date: "+esc(r.briefData.dates)+"</div>":"")' +
     '        +(r.briefData&&r.briefData.promoFocus?"<div class=\'meta\'>Promo focus: "+esc(r.briefData.promoFocus)+"</div>":"");' +
