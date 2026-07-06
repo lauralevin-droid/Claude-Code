@@ -84,6 +84,11 @@ function htmlPage(title, body) {
   ).setTitle(title);
 }
 
+// Returns the redirect URI this script uses — must match exactly in the Wrike app settings
+function getRedirectUri() {
+  return ScriptApp.getService().getUrl();
+}
+
 // ─── Called from the HTML form ────────────────────────────────────────────────
 
 // Save Client ID + Secret and return the Wrike authorization URL.
@@ -429,9 +434,13 @@ function getFormHtml(connected) {
     '  document.getElementById("authStatus").textContent="Saving credentials…";' +
     '  google.script.run' +
     '    .withSuccessHandler(function(r){' +
-    '      if(r.error){document.getElementById("authStatus").textContent="Error: "+r.error;document.getElementById("authBtn").disabled=false;return;}' +
-    '      document.getElementById("authStatus").textContent="Redirecting to Wrike…";' +
-    '      window.location.href=r.authUrl;' +
+    '      if(r.error){document.getElementById("authStatus").innerHTML="Error: "+esc(r.error);document.getElementById("authBtn").disabled=false;return;}' +
+    '      document.getElementById("authStatus").innerHTML=' +
+    '        "<strong>Step 2:</strong> Make sure this exact URL is saved as a Redirect URI in your Wrike app:<br>"' +
+    '        +"<code style=\'display:block;background:#f3f4f6;padding:8px;border-radius:4px;margin:8px 0;font-size:12px;word-break:break-all\'>"+esc(r.redirectUri)+"</code>"' +
+    '        +"<small>In Wrike: edit your app → Redirect URIs → paste the URL above → Save.</small><br><br>"' +
+    '        +"<button onclick=\'window.location.href=\""+r.authUrl+"\"\' style=\'width:auto;margin:0;padding:8px 20px\'>Continue to Wrike →</button>";' +
+    '      document.getElementById("authBtn").disabled=false;' +
     '    })' +
     '    .withFailureHandler(function(e){' +
     '      document.getElementById("authStatus").textContent="Error: "+e.message;' +
