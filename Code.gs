@@ -86,7 +86,8 @@ function htmlPage(title, body) {
 
 // ─── Called from the HTML form ────────────────────────────────────────────────
 
-// Save Client ID + Secret and return the Wrike authorization URL
+// Save Client ID + Secret and return the Wrike authorization URL.
+// The caller should redirect window.location.href (not open a popup).
 function saveCredentialsAndGetAuthUrl(clientId, clientSecret) {
   if (!clientId || !clientSecret) return { error: 'Both Client ID and Client Secret are required.' };
   var props = PropertiesService.getScriptProperties();
@@ -101,7 +102,7 @@ function saveCredentialsAndGetAuthUrl(clientId, clientSecret) {
     '&scope=Default' +
     '&state=wrike_oauth';
 
-  return { authUrl: authUrl };
+  return { authUrl: authUrl, redirectUri: redirectUri };
 }
 
 function processForm(form) {
@@ -187,20 +188,54 @@ function fetchWrikeBrief(wrikeUrl) {
     return { error: 'Wrike is not connected. Open the Settings panel and authorize.' };
   }
 
-  var taskId = parseWrikeTaskId(wrikeUrl);
-  if (!taskId) return { error: 'Could not parse a task ID from: ' + wrikeUrl };
+  var numericId = parseWrikeTaskId(wrikeUrl);
+  if (!numericId) return { error: 'Could not parse a task ID from: ' + wrikeUrl };
 
-  var result = callWrikeApi(
-    'https://www.wrike.com/api/v4/tasks?permalink=' + encodeURIComponent(wrikeUrl)
-  );
-  if (result.error) return result;
-
-  var tasks = result.data;
-  if (!tasks || tasks.length === 0) {
-    return { error: 'No task found for that URL. Check the link and that the app has access.' };
+  // Strategy 1: follow the open.htm redirect to get the real Wrike API task ID
+  var apiTaskId = resolveTaskIdViaRedirect(numericId);
+  if (apiTaskId) {
+    var r1 = callWrikeApi('https://www.wrike.com/api/v4/tasks/' + apiTaskId);
+    if (!r1.error && r1.data && r1.data.length > 0) {
+      return extractBriefFromTask(r1.data[0], wrikeUrl);
+    }
   }
 
-  return extractBriefFromTask(tasks[0], wrikeUrl);
+  // Strategy 2: permalink search with the full open.htm URL
+  var r2 = callWrikeApi(
+    'https://www.wrike.com/api/v4/tasks?permalink=' + encodeURIComponent(wrikeUrl)
+  );
+  if (!r2.error && r2.data && r2.data.length > 0) {
+    return extractBriefFromTask(r2.data[0], wrikeUrl);
+  }
+
+  // Build a diagnostic message from what the API actually returned
+  var diag = r2.error
+    ? r2.error
+    : ('API returned 0 tasks. Raw: ' + JSON.stringify(r2).substring(0, 200));
+  return {
+    error: 'Could not find that task in Wrike (' + diag + '). ' +
+      'Make sure the Wrike app has access to the workspace containing this task.'
+  };
+}
+
+// Follow the open.htm short-link (without redirects) to extract the Wrike API task ID
+function resolveTaskIdViaRedirect(numericId) {
+  try {
+    var resp = UrlFetchApp.fetch(
+      'https://www.wrike.com/open.htm?id=' + numericId,
+      {
+        muteHttpExceptions: true,
+        followRedirects: false,
+        headers: { 'Authorization': 'Bearer ' + getWrikeToken() },
+      }
+    );
+    var location = resp.getHeaders()['Location'] || resp.getHeaders()['location'] || '';
+    // Workspace URLs contain the task API ID: ...&id=IEAAAAAAKQAAAABY...
+    var m = location.match(/[?&#]id=([A-Z0-9]{10,})/);
+    return m ? m[1] : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 // Makes a GET request; retries once with a refreshed token on 401
@@ -395,14 +430,8 @@ function getFormHtml(connected) {
     '  google.script.run' +
     '    .withSuccessHandler(function(r){' +
     '      if(r.error){document.getElementById("authStatus").textContent="Error: "+r.error;document.getElementById("authBtn").disabled=false;return;}' +
-    '      document.getElementById("authStatus").textContent="Opening Wrike authorization…";' +
-    '      var popup=window.open(r.authUrl,"wrike_auth","width=600,height=700");' +
-    '      var check=setInterval(function(){' +
-    '        if(popup&&popup.closed){' +
-    '          clearInterval(check);' +
-    '          window.location.reload();' +
-    '        }' +
-    '      },1000);' +
+    '      document.getElementById("authStatus").textContent="Redirecting to Wrike…";' +
+    '      window.location.href=r.authUrl;' +
     '    })' +
     '    .withFailureHandler(function(e){' +
     '      document.getElementById("authStatus").textContent="Error: "+e.message;' +
