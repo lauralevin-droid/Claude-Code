@@ -85,31 +85,32 @@ function htmlPage(title, body) {
 }
 
 // Returns the redirect URI this script uses — must match exactly in the Wrike app settings
+// ─── Called from the HTML form ────────────────────────────────────────────────
+
+// Returns the canonical redirect URI this script will use — always server-side.
 function getRedirectUri() {
   return ScriptApp.getService().getUrl();
 }
 
-// ─── Called from the HTML form ────────────────────────────────────────────────
-
-// Save Client ID + Secret and return the Wrike authorization URL.
-// The caller should redirect window.location.href (not open a popup).
-function saveCredentialsAndGetAuthUrl(clientId, clientSecret, redirectUri) {
+// Save Client ID + Secret and build the Wrike authorization URL.
+// redirectUri is always derived server-side to guarantee consistency.
+function saveCredentialsAndGetAuthUrl(clientId, clientSecret) {
   if (!clientId || !clientSecret) return { error: 'Both Client ID and Client Secret are required.' };
-  if (!redirectUri) return { error: 'Redirect URI is required.' };
 
+  var redirectUri = ScriptApp.getService().getUrl();
   var props = PropertiesService.getScriptProperties();
   props.setProperty('WRIKE_CLIENT_ID',     clientId.trim());
   props.setProperty('WRIKE_CLIENT_SECRET', clientSecret.trim());
-  props.setProperty('WRIKE_REDIRECT_URI',  redirectUri.trim());
+  props.setProperty('WRIKE_REDIRECT_URI',  redirectUri);
 
   var authUrl = 'https://login.wrike.com/oauth2/authorize' +
     '?client_id='    + encodeURIComponent(clientId.trim()) +
     '&response_type=code' +
-    '&redirect_uri=' + encodeURIComponent(redirectUri.trim()) +
+    '&redirect_uri=' + encodeURIComponent(redirectUri) +
     '&scope=Default' +
     '&state=wrike_oauth';
 
-  return { authUrl: authUrl, redirectUri: redirectUri.trim() };
+  return { authUrl: authUrl, redirectUri: redirectUri };
 }
 
 function processForm(form) {
@@ -384,13 +385,12 @@ function getFormHtml(connected) {
     '<h2 style="margin:0 0 4px">Connect Wrike</h2>' +
     '<p class="sub">In Wrike: <strong>profile avatar → Apps &amp; Integrations → API → Create new app</strong>. ' +
     'Follow the steps below in order.</p>' +
-    '<p style="font-size:13px;font-weight:600;margin:0 0 4px">Step 1 — Copy this Redirect URI into your Wrike app:</p>' +
-    '<div id="uriDisplay" style="font-size:12px;background:#f3f4f6;border:1px solid #d1d5db;padding:8px 10px;border-radius:6px;word-break:break-all;margin-bottom:4px;color:#111827;font-family:monospace"></div>' +
-    '<p style="font-size:11px;color:#6b7280;margin:0 0 12px">In your Wrike app settings → Redirect URIs → paste exactly as shown → Save.</p>' +
+    '<p style="font-size:13px;font-weight:600;margin:0 0 4px">Step 1 — Register this Redirect URI in your Wrike app <em>before</em> clicking Authorize:</p>' +
+    '<div id="uriDisplay" style="font-size:12px;background:#f3f4f6;border:1px solid #d1d5db;padding:8px 10px;border-radius:6px;word-break:break-all;margin-bottom:4px;color:#111827;font-family:monospace">Loading…</div>' +
+    '<p style="font-size:11px;color:#6b7280;margin:0 0 12px">Wrike app → Redirect URIs → paste exactly as shown → Save.</p>' +
     '<p style="font-size:13px;font-weight:600;margin:0 0 4px">Step 2 — Paste your app credentials:</p>' +
     '<label>Client ID</label><input id="clientId" type="text" placeholder="e.g. XXXXXXXXXXXXXXXX" />' +
     '<label>Client Secret</label><input id="clientSecret" type="password" placeholder="Paste client secret…" />' +
-    '<input id="redirectUri" type="hidden" />' +
     '<button id="authBtn" onclick="authorize()" style="margin-top:16px">Authorize with Wrike ↗</button>' +
     '<p id="authStatus" style="font-size:13px;margin-top:10px;color:#374151"></p>' +
     '</div>';
@@ -430,17 +430,17 @@ function getFormHtml(connected) {
     '<p class="sub" style="margin-bottom:16px">Paste a Wrike brief link to generate a pre-filled email copy doc.</p>' +
     banner + settings + form +
     '<script>' +
-    // Populate the redirect URI display from the actual browser URL (strip query string)
-    'var _uri=window.location.href.split("?")[0].split("#")[0];' +
-    'var _uriEl=document.getElementById("uriDisplay");' +
-    'if(_uriEl){_uriEl.textContent=_uri;document.getElementById("redirectUri").value=_uri;}' +
+    // Load the canonical redirect URI from the server and display it
+    'google.script.run.withSuccessHandler(function(uri){' +
+    '  var el=document.getElementById("uriDisplay");' +
+    '  if(el)el.textContent=uri;' +
+    '}).getRedirectUri();' +
     'function showSettings(){' +
     '  document.getElementById("settings").style.display="block";' +
     '}' +
     'function authorize(){' +
     '  var id=document.getElementById("clientId").value.trim();' +
     '  var secret=document.getElementById("clientSecret").value.trim();' +
-    '  var uri=document.getElementById("redirectUri").value.trim();' +
     '  if(!id||!secret){alert("Enter both Client ID and Client Secret.");return;}' +
     '  document.getElementById("authBtn").disabled=true;' +
     '  document.getElementById("authStatus").textContent="Saving credentials…";' +
@@ -454,7 +454,7 @@ function getFormHtml(connected) {
     '      document.getElementById("authStatus").textContent="Error: "+e.message;' +
     '      document.getElementById("authBtn").disabled=false;' +
     '    })' +
-    '    .saveCredentialsAndGetAuthUrl(id,secret,uri);' +
+    '    .saveCredentialsAndGetAuthUrl(id,secret);' +
     '}' +
     'function generate(){' +
     '  var url=document.getElementById("wrikeUrl").value.trim();' +
