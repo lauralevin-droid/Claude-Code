@@ -27,15 +27,15 @@ var TEMPLATES = {
 
 // ─── One-time Wrike token setup ───────────────────────────────────────────────
 
-function setupWrikeToken() {
-  var token = Browser.inputBox(
-    'Wrike API Token Setup',
-    'Paste your Wrike permanent access token:',
-    Browser.Buttons.OK_CANCEL
-  );
-  if (!token || token === 'cancel' || token.trim() === '') return;
+// Called from the web app settings panel
+function saveWrikeToken(token) {
+  if (!token || !token.trim()) return { error: 'Token cannot be empty.' };
   PropertiesService.getScriptProperties().setProperty('WRIKE_TOKEN', token.trim());
-  Browser.msgBox('Token saved. You can now run the generator.');
+  return { ok: true };
+}
+
+function hasWrikeToken() {
+  return !!PropertiesService.getScriptProperties().getProperty('WRIKE_TOKEN');
 }
 
 function getWrikeToken() {
@@ -45,7 +45,8 @@ function getWrikeToken() {
 // ─── Web App entry point ──────────────────────────────────────────────────────
 
 function doGet() {
-  return HtmlService.createHtmlOutput(getFormHtml())
+  var html = getFormHtml(hasWrikeToken());
+  return HtmlService.createHtmlOutput(html)
     .setTitle('Thrive Market Email Copy Template Generator')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
@@ -262,35 +263,30 @@ function escapeRegex(str) {
 
 // ─── Web app HTML ─────────────────────────────────────────────────────────────
 
-function getFormHtml() {
+function getFormHtml(tokenSaved) {
   var templateOptions = Object.keys(TEMPLATES).map(function(key) {
     return '<option value="' + key + '">' + TEMPLATES[key].label + '</option>';
   }).join('');
 
-  return '<!DOCTYPE html><html><head><meta charset="utf-8">' +
-    '<title>Thrive Market Email Copy Template Generator</title>' +
-    '<style>' +
-    'body{font-family:Google Sans,Arial,sans-serif;max-width:580px;margin:48px auto;padding:0 20px;color:#1f2937}' +
-    'h1{color:#1B4332;font-size:22px;margin-bottom:8px}' +
-    'p.sub{color:#6b7280;font-size:13px;margin:0 0 28px}' +
-    'label{display:block;font-size:13px;font-weight:600;margin:18px 0 5px}' +
-    'label span{font-weight:400;color:#6b7280}' +
-    'input,select{width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;color:#111827}' +
-    'select{background:#fff}' +
-    'button{margin-top:28px;background:#1B4332;color:#fff;border:none;padding:11px 28px;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;width:100%}' +
-    'button:disabled{opacity:.5;cursor:default}' +
-    '#status{margin-top:18px;font-size:14px;color:#374151;min-height:20px}' +
-    '#result{margin-top:14px;padding:14px 16px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;display:none}' +
-    '#result a{color:#1B4332;font-weight:700;font-size:15px;text-decoration:none}' +
-    '#result a:hover{text-decoration:underline}' +
-    '.meta{font-size:12px;color:#6b7280;margin-top:8px}' +
-    '.error{color:#b91c1c;margin-top:12px;font-size:14px}' +
-    '</style></head><body>' +
-    '<h1>Email Copy Template Generator</h1>' +
-    '<p class="sub">Paste a Wrike brief link to generate a pre-filled email copy doc.</p>' +
+  var tokenBanner = tokenSaved
+    ? '<div class="token-ok">✓ Wrike connected — <a href="#" onclick="showSettings();return false;">update token</a></div>'
+    : '<div class="token-warn">⚠ Wrike token not set. <a href="#" onclick="showSettings();return false;">Add token to get started</a></div>';
+
+  var settingsPanel =
+    '<div id="settings" style="display:' + (tokenSaved ? 'none' : 'block') + '">' +
+    '<h2>Connect Wrike</h2>' +
+    '<p class="sub">Create a permanent access token in Wrike: <strong>Profile → Apps &amp; Integrations → API → Create new token</strong>. Paste it below — it\'s saved to this script only.</p>' +
+    '<label>Wrike API Token</label>' +
+    '<input id="wrikeToken" type="password" placeholder="Paste token here…" />' +
+    '<button id="saveBtn" onclick="saveToken()">Save Token</button>' +
+    '<p id="tokenStatus"></p>' +
+    '</div>';
+
+  var mainForm =
+    '<div id="main" style="display:' + (tokenSaved ? 'block' : 'none') + '">' +
     '<label>Brief <span>(Wrike link)</span></label>' +
     '<input id="wrikeUrl" type="url" placeholder="https://www.wrike.com/open.htm?id=..." />' +
-    '<label>Template <span>(auto-detected from brief, or override below)</span></label>' +
+    '<label>Template <span>(auto-detected from brief, or override)</span></label>' +
     '<select id="templateType">' +
     '<option value="auto">Auto-detect from brief</option>' +
     templateOptions +
@@ -299,7 +295,61 @@ function getFormHtml() {
     '<p id="status"></p>' +
     '<div id="result"></div>' +
     '<p id="errMsg" class="error"></p>' +
+    '</div>';
+
+  return '<!DOCTYPE html><html><head><meta charset="utf-8">' +
+    '<title>Thrive Market Email Copy Template Generator</title>' +
+    '<style>' +
+    'body{font-family:Google Sans,Arial,sans-serif;max-width:580px;margin:48px auto;padding:0 20px;color:#1f2937}' +
+    'h1{color:#1B4332;font-size:22px;margin-bottom:4px}' +
+    'h2{color:#1B4332;font-size:16px;margin:0 0 6px}' +
+    'p.sub{color:#6b7280;font-size:13px;margin:0 0 20px}' +
+    'label{display:block;font-size:13px;font-weight:600;margin:18px 0 5px}' +
+    'label span{font-weight:400;color:#6b7280}' +
+    'input,select{width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;color:#111827}' +
+    'select{background:#fff}' +
+    'button{margin-top:20px;background:#1B4332;color:#fff;border:none;padding:11px 28px;border-radius:6px;font-size:15px;font-weight:600;cursor:pointer;width:100%}' +
+    'button:disabled{opacity:.5;cursor:default}' +
+    '.token-ok{font-size:13px;color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;padding:8px 12px;border-radius:6px;margin-bottom:20px}' +
+    '.token-ok a,.token-warn a{color:inherit;font-weight:600}' +
+    '.token-warn{font-size:13px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;padding:8px 12px;border-radius:6px;margin-bottom:20px}' +
+    '#status{margin-top:18px;font-size:14px;color:#374151;min-height:20px}' +
+    '#result{margin-top:14px;padding:14px 16px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;display:none}' +
+    '#result a{color:#1B4332;font-weight:700;font-size:15px;text-decoration:none}' +
+    '#result a:hover{text-decoration:underline}' +
+    '.meta{font-size:12px;color:#6b7280;margin-top:6px}' +
+    '.error{color:#b91c1c;margin-top:12px;font-size:14px}' +
+    '#tokenStatus{font-size:13px;margin-top:12px}' +
+    '</style></head><body>' +
+    '<h1>Email Copy Template Generator</h1>' +
+    '<p class="sub" style="margin-bottom:16px">Paste a Wrike brief link to generate a pre-filled email copy doc.</p>' +
+    tokenBanner +
+    settingsPanel +
+    mainForm +
     '<script>' +
+    'function showSettings(){' +
+    '  document.getElementById("settings").style.display="block";' +
+    '  document.getElementById("main").style.display="none";' +
+    '}' +
+    'function saveToken(){' +
+    '  var t=document.getElementById("wrikeToken").value.trim();' +
+    '  if(!t){alert("Please paste a token.");return;}' +
+    '  document.getElementById("saveBtn").disabled=true;' +
+    '  document.getElementById("tokenStatus").textContent="Saving…";' +
+    '  google.script.run' +
+    '    .withSuccessHandler(function(r){' +
+    '      if(r.error){document.getElementById("tokenStatus").textContent="Error: "+r.error;document.getElementById("saveBtn").disabled=false;return;}' +
+    '      document.getElementById("settings").style.display="none";' +
+    '      document.getElementById("main").style.display="block";' +
+    '      document.querySelector(".token-warn") && (document.querySelector(".token-warn").outerHTML="<div class=\'token-ok\'>✓ Wrike connected — <a href=\'#\' onclick=\'showSettings();return false;\'>update token</a></div>");' +
+    '      document.getElementById("saveBtn").disabled=false;' +
+    '    })' +
+    '    .withFailureHandler(function(e){' +
+    '      document.getElementById("tokenStatus").textContent="Error: "+e.message;' +
+    '      document.getElementById("saveBtn").disabled=false;' +
+    '    })' +
+    '    .saveWrikeToken(t);' +
+    '}' +
     'function generate(){' +
     '  var url=document.getElementById("wrikeUrl").value.trim();' +
     '  var tmpl=document.getElementById("templateType").value;' +
@@ -314,10 +364,10 @@ function getFormHtml() {
     '      document.getElementById("btn").disabled=false;' +
     '      if(r.error){document.getElementById("errMsg").textContent=r.error;return;}' +
     '      var div=document.getElementById("result");' +
-    '      div.innerHTML="<a href=\'"+r.url+"\' target=\'_blank\'>↗ Open "+r.name+"</a>"' +
-    '        +"<div class=\'meta\'>Template used: "+r.templateUsed+"</div>"' +
-    '        +(r.briefData&&r.briefData.dates?"<div class=\'meta\'>Date detected: "+r.briefData.dates+"</div>":"")' +
-    '        +(r.briefData&&r.briefData.promoFocus?"<div class=\'meta\'>Promo focus: "+r.briefData.promoFocus+"</div>":"");' +
+    '      div.innerHTML="<a href=\'"+r.url+"\' target=\'_blank\'>↗ Open: "+escHtml(r.name)+"</a>"' +
+    '        +"<div class=\'meta\'>Template: "+escHtml(r.templateUsed)+"</div>"' +
+    '        +(r.briefData&&r.briefData.dates?"<div class=\'meta\'>Date: "+escHtml(r.briefData.dates)+"</div>":"")' +
+    '        +(r.briefData&&r.briefData.promoFocus?"<div class=\'meta\'>Promo focus: "+escHtml(r.briefData.promoFocus)+"</div>":"");' +
     '      div.style.display="block";' +
     '    })' +
     '    .withFailureHandler(function(e){' +
@@ -327,5 +377,6 @@ function getFormHtml() {
     '    })' +
     '    .processForm({wrikeUrl:url,templateType:tmpl});' +
     '}' +
+    'function escHtml(s){return s?s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"):""}' +
     '<\/script></body></html>';
 }
