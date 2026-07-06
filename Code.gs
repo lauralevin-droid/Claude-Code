@@ -39,7 +39,7 @@ function createPromoBrief() {
     "Paste the Thrive Market product URL:",
     Browser.Buttons.OK_CANCEL
   );
-  if (productUrl === "cancel" || productUrl === "") return;
+  if (!productUrl || productUrl === "cancel" || productUrl === "") return;
 
   if (!productUrl.includes("thrivemarket.com")) {
     Browser.msgBox("Please enter a valid Thrive Market product URL.");
@@ -51,14 +51,14 @@ function createPromoBrief() {
     "What is the discount? (e.g. 20% off, $5 off, BOGO):",
     Browser.Buttons.OK_CANCEL
   );
-  if (discount === "cancel") return;
+  if (!discount || discount === "cancel") return;
 
   const promoDates = Browser.inputBox(
     "Promotion Dates",
     "Enter the promotion date range (e.g. July 4–7, 2026):",
     Browser.Buttons.OK_CANCEL
   );
-  if (promoDates === "cancel") return;
+  if (!promoDates || promoDates === "cancel") return;
 
   Browser.msgBox("Fetching product info — this may take a moment. Click OK to continue.");
 
