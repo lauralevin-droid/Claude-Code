@@ -448,7 +448,7 @@ function getFormHtml(connected) {
     '    .withSuccessHandler(function(r){' +
     '      if(r.error){document.getElementById("authStatus").innerHTML="Error: "+esc(r.error);document.getElementById("authBtn").disabled=false;return;}' +
     '      document.getElementById("authStatus").textContent="Redirecting to Wrike...";' +
-    '      window.location.href=r.authUrl;' +
+    '      window.top.location.href=r.authUrl;' +
     '    })' +
     '    .withFailureHandler(function(e){' +
     '      document.getElementById("authStatus").textContent="Error: "+e.message;' +
