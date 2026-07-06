@@ -199,16 +199,19 @@ function fetchWrikeBrief(wrikeUrl) {
   var numericId = parseWrikeTaskId(wrikeUrl);
   if (!numericId) return { error: 'Could not parse a task ID from: ' + wrikeUrl };
 
-  // Strategy 1: follow the open.htm redirect to get the real Wrike API task ID
-  var apiTaskId = resolveTaskIdViaRedirect(numericId);
-  if (apiTaskId) {
-    var r1 = callWrikeApi('https://www.wrike.com/api/v4/tasks/' + apiTaskId);
+  // Strategy 1: get account ID from redirect, then search tasks with ?customItemIds
+  var accountId = resolveAccountIdViaRedirect(numericId);
+  if (accountId) {
+    var r1 = callWrikeApi(
+      'https://www.wrike.com/api/v4/accounts/' + accountId +
+      '/tasks?customItemIds=[' + numericId + ']&fields=[description]'
+    );
     if (!r1.error && r1.data && r1.data.length > 0) {
       return extractBriefFromTask(r1.data[0], wrikeUrl);
     }
   }
 
-  // Strategy 2: permalink search with the full open.htm URL
+  // Strategy 2: permalink search
   var r2 = callWrikeApi(
     'https://www.wrike.com/api/v4/tasks?permalink=' + encodeURIComponent(wrikeUrl)
   );
@@ -216,7 +219,24 @@ function fetchWrikeBrief(wrikeUrl) {
     return extractBriefFromTask(r2.data[0], wrikeUrl);
   }
 
-  // Build a diagnostic message from what the API actually returned
+  // Strategy 3: find the task's folder from the redirect URL, then list tasks in that folder
+  var folderId = resolveFolderIdViaRedirect(numericId);
+  if (folderId) {
+    var r3 = callWrikeApi(
+      'https://www.wrike.com/api/v4/folders/' + folderId + '/tasks?fields=[description]'
+    );
+    if (!r3.error && r3.data && r3.data.length > 0) {
+      // Find the task whose numeric permalink matches
+      for (var i = 0; i < r3.data.length; i++) {
+        if (r3.data[i].permalink && r3.data[i].permalink.indexOf(numericId) !== -1) {
+          return extractBriefFromTask(r3.data[i], wrikeUrl);
+        }
+      }
+      // Fall back to first task in folder
+      return extractBriefFromTask(r3.data[0], wrikeUrl);
+    }
+  }
+
   var diag = r2.error
     ? r2.error
     : ('API returned 0 tasks. Raw: ' + JSON.stringify(r2).substring(0, 200));
@@ -227,7 +247,7 @@ function fetchWrikeBrief(wrikeUrl) {
 }
 
 // Follow the open.htm short-link (without redirects) to extract the Wrike API task ID
-function resolveTaskIdViaRedirect(numericId) {
+function getWrikeRedirectLocation(numericId) {
   try {
     var resp = UrlFetchApp.fetch(
       'https://www.wrike.com/open.htm?id=' + numericId,
@@ -237,13 +257,30 @@ function resolveTaskIdViaRedirect(numericId) {
         headers: { 'Authorization': 'Bearer ' + getWrikeToken() },
       }
     );
-    var location = resp.getHeaders()['Location'] || resp.getHeaders()['location'] || '';
-    // Workspace URLs contain the task API ID: ...&id=IEAAAAAAKQAAAABY...
-    var m = location.match(/[?&#]id=([A-Z0-9]{10,})/);
-    return m ? m[1] : null;
+    return resp.getHeaders()['Location'] || resp.getHeaders()['location'] || '';
   } catch (_) {
-    return null;
+    return '';
   }
+}
+
+function resolveTaskIdViaRedirect(numericId) {
+  var location = getWrikeRedirectLocation(numericId);
+  var m = location.match(/[?&#]id=([A-Z0-9]{10,})/);
+  return m ? m[1] : null;
+}
+
+function resolveAccountIdViaRedirect(numericId) {
+  var location = getWrikeRedirectLocation(numericId);
+  // Location: /workspace.htm?acc=3990190#folder/...
+  var m = location.match(/[?&]acc=(\d+)/);
+  return m ? m[1] : null;
+}
+
+function resolveFolderIdViaRedirect(numericId) {
+  var location = getWrikeRedirectLocation(numericId);
+  // Location: ...#folder/4486916737/tableV2?...
+  var m = location.match(/folder\/(\d+)/);
+  return m ? m[1] : null;
 }
 
 // Makes a GET request; retries once with a refreshed token on 401
