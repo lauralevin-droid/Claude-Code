@@ -4,12 +4,12 @@
  * Setup (one-time, in the Apps Script editor):
  *   1. Get your permanent access token from Wrike:
  *      profile avatar -> Apps & Integrations -> open your app -> copy "Permanent access token"
- *   2. Temporarily add this function to Code.gs, run it once, then delete it:
+ *   2. Temporarily add this to Code.gs, run it once, then delete it:
  *        function tempSetToken() {
  *          PropertiesService.getScriptProperties().setProperty('WRIKE_TOKEN', 'your-token-here');
  *        }
  *   3. Deploy as Web App (Execute as: Me, Who has access: Anyone within Thrive Market)
- *   4. Open the Web App URL and start generating docs
+ *   4. Open the Web App URL, paste your Wrike brief folder URL in Settings, click Save Folder
  */
 
 // - Template IDs (Google Doc IDs) -
@@ -36,10 +36,61 @@ function getWrikeToken_() {
   return token;
 }
 
+// - Folder setting (called from the UI) -
+
+function getBriefFolderUrl() {
+  return PropertiesService.getScriptProperties().getProperty('BRIEF_FOLDER_URL') || '';
+}
+
+/**
+ * Save the brief folder URL and resolve its alphanumeric Wrike ID.
+ * The ID resolution traverses all spaces (slow, ~20-40s) but only runs once.
+ * The result is cached in script properties for all future lookups.
+ */
+function saveBriefFolder(folderUrl) {
+  folderUrl = (folderUrl || '').trim();
+  if (!folderUrl) return { error: 'Please paste a Wrike folder URL.' };
+
+  PropertiesService.getScriptProperties().setProperty('BRIEF_FOLDER_URL', folderUrl);
+  PropertiesService.getScriptProperties().deleteProperty('BRIEF_FOLDER_ID');
+
+  var folderId = resolveNumericUrlToId_(folderUrl);
+  if (!folderId) {
+    return { error: 'Could not find that folder in Wrike. Make sure you right-clicked the folder -> Copy link.' };
+  }
+
+  PropertiesService.getScriptProperties().setProperty('BRIEF_FOLDER_ID', folderId);
+  return { ok: true };
+}
+
+function getCachedFolderId_() {
+  return PropertiesService.getScriptProperties().getProperty('BRIEF_FOLDER_ID') || '';
+}
+
+/**
+ * Resolve a Wrike URL containing a numeric ID (e.g. open.htm?id=594378430)
+ * to the alphanumeric folder/task ID used by the REST API.
+ * Searches all spaces until found; caches the result.
+ */
+function resolveNumericUrlToId_(url) {
+  var m = url.match(/[?&#]id=(\d+)/);
+  if (!m) return null;
+  var targetPermalink = 'https://www.wrike.com/open.htm?id=' + m[1];
+
+  var spaces = (wrikeFetch_('/spaces').data || []);
+  for (var i = 0; i < spaces.length; i++) {
+    var folders = (wrikeFetch_('/spaces/' + spaces[i].id + '/folders').data || []);
+    for (var j = 0; j < folders.length; j++) {
+      if (folders[j].permalink === targetPermalink) return folders[j].id;
+    }
+  }
+  return null;
+}
+
 // - Web App entry point -
 
 function doGet() {
-  var html = getFormHtml_(hasWrikeToken());
+  var html = getFormHtml_(hasWrikeToken(), getBriefFolderUrl());
   return HtmlService.createHtmlOutput(html)
     .setTitle('Thrive Market Email Copy Template Generator')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
@@ -54,6 +105,7 @@ function processForm(form) {
   if (!wrikeUrl) return { error: 'Please paste a Wrike brief URL.' };
   if (wrikeUrl.indexOf('wrike.com') === -1) return { error: 'Please enter a valid Wrike URL.' };
   if (!hasWrikeToken()) return { error: 'Wrike token not configured. See setup instructions in Code.gs.' };
+  if (!getCachedFolderId_()) return { error: 'No brief folder saved yet. Open Settings, paste your folder URL, and click Save Folder.' };
 
   var brief = fetchWrikeBrief_(wrikeUrl);
   if (brief.error) return { error: brief.error };
@@ -81,45 +133,75 @@ function processForm(form) {
   }
 }
 
-// - Wrike API: fast permalink lookup -
+// - Wrike brief lookup -
 
+/**
+ * Find a brief by its permalink URL within the saved folder.
+ * Searches direct children, then one level deeper (month folders -> briefs).
+ * Checks both folders (briefs stored as projects) and tasks.
+ */
 function fetchWrikeBrief_(wrikeUrl) {
-  var url      = wrikeUrl.trim();
-  var resolved = resolvePermalink_(url);
-  if (!resolved) {
-    return { error: 'Could not find that brief in Wrike. Make sure you copied the correct task link.' };
+  var targetPermalink = wrikeUrl.trim();
+  var folderId        = getCachedFolderId_();
+
+  if (!folderId) {
+    return { error: 'No brief folder configured. Open Settings and save your folder URL.' };
   }
 
-  var task = fetchFullItem_(resolved.id, !!resolved._isFolder);
+  var task = findByPermalinkInFolder_(folderId, targetPermalink);
   if (!task) {
-    return { error: 'Found the task in Wrike but could not load its details. Try again.' };
+    return { error: 'Could not find that brief in your configured folder. Make sure the link is from a brief inside that folder.' };
   }
 
-  return extractBriefFromTask_(task, url);
+  return extractBriefFromTask_(task, targetPermalink);
 }
 
-function resolvePermalink_(wrikeUrl) {
-  var encoded    = encodeURIComponent(wrikeUrl);
-  var rawEncoded = wrikeUrl.replace(/&/g, '%26');
+/**
+ * Search for an item with the given permalink within a folder.
+ * Checks: direct child folders, direct child tasks,
+ *         then grandchild folders and tasks (one level deeper).
+ */
+function findByPermalinkInFolder_(folderId, targetPermalink) {
+  // Level 1: direct child folders
+  var childFolders = [];
+  try { childFolders = wrikeFetch_('/folders/' + folderId + '/folders').data || []; } catch (_) {}
 
-  try {
-    var d1 = wrikeFetch_('/tasks?permalink=' + encoded);
-    if (d1.data && d1.data[0]) return d1.data[0];
-  } catch (e1) { /* fall through */ }
-
-  try {
-    var d2 = wrikeFetch_('/tasks?permalink=' + rawEncoded);
-    if (d2.data && d2.data[0]) return d2.data[0];
-  } catch (e2) { /* fall through */ }
-
-  try {
-    var d3 = wrikeFetch_('/folders?permalink=' + encoded);
-    if (d3.data && d3.data[0]) {
-      var folder = d3.data[0];
-      folder._isFolder = true;
-      return folder;
+  for (var i = 0; i < childFolders.length; i++) {
+    if (childFolders[i].permalink === targetPermalink) {
+      return fetchFullItem_(childFolders[i].id, true);
     }
-  } catch (e3) { /* fall through */ }
+  }
+
+  // Level 1: direct child tasks
+  var childTasks = [];
+  try { childTasks = wrikeFetch_('/folders/' + folderId + '/tasks').data || []; } catch (_) {}
+
+  for (var i = 0; i < childTasks.length; i++) {
+    if (childTasks[i].permalink === targetPermalink) {
+      return fetchFullItem_(childTasks[i].id, false);
+    }
+  }
+
+  // Level 2: grandchild folders and tasks (brief inside a month folder)
+  for (var i = 0; i < childFolders.length; i++) {
+    var grandFolders = [];
+    try { grandFolders = wrikeFetch_('/folders/' + childFolders[i].id + '/folders').data || []; } catch (_) {}
+
+    for (var j = 0; j < grandFolders.length; j++) {
+      if (grandFolders[j].permalink === targetPermalink) {
+        return fetchFullItem_(grandFolders[j].id, true);
+      }
+    }
+
+    var grandTasks = [];
+    try { grandTasks = wrikeFetch_('/folders/' + childFolders[i].id + '/tasks').data || []; } catch (_) {}
+
+    for (var j = 0; j < grandTasks.length; j++) {
+      if (grandTasks[j].permalink === targetPermalink) {
+        return fetchFullItem_(grandTasks[j].id, false);
+      }
+    }
+  }
 
   return null;
 }
@@ -253,22 +335,35 @@ function escapeRegex_(str) {
 
 // - HTML UI -
 
-function getFormHtml_(connected) {
+function getFormHtml_(connected, savedFolderUrl) {
   var templateOptions = Object.keys(TEMPLATES).map(function(k) {
     return '<option value="' + k + '">' + TEMPLATES[k].label + '</option>';
   }).join('');
 
-  var banner = connected
-    ? '<div class="pill ok">Wrike connected</div>'
-    : '<div class="pill warn">Wrike token not set. See setup instructions in Code.gs.</div>';
+  var folderSaved  = !!getCachedFolderId_();
+  var wrikeStatus  = !connected
+    ? '<div class="pill warn">Wrike token not set. See setup instructions in Code.gs.</div>'
+    : folderSaved
+      ? '<div class="pill ok">Wrike connected &nbsp;&middot;&nbsp; <a href="#" onclick="showSettings();return false;">settings</a></div>'
+      : '<div class="pill warn">Wrike connected, but no brief folder set &mdash; <a href="#" onclick="showSettings();return false;">open settings</a></div>';
+
+  var settings =
+    '<div id="settings" style="display:' + (folderSaved ? 'none' : 'block') + ';background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:24px">' +
+    '<h2 style="margin:0 0 8px;font-size:15px;color:#1B4332">Settings</h2>' +
+    '<p class="sub">Right-click the Wrike folder that contains your email briefs &rarr; Copy link &rarr; paste below. This only needs to be done once.</p>' +
+    '<label>Brief Folder URL</label>' +
+    '<input id="folderUrl" type="url" value="' + (savedFolderUrl || '') + '" placeholder="https://www.wrike.com/open.htm?id=..." />' +
+    '<button id="saveBtn" onclick="saveFolder()">Save Folder (takes ~20-30 seconds)</button>' +
+    '<p id="saveStatus" style="font-size:13px;margin-top:10px;color:#374151;min-height:16px"></p>' +
+    '</div>';
 
   return '<!DOCTYPE html><html><head><meta charset="utf-8">' +
     '<title>Thrive Market Email Copy Template Generator</title>' +
     '<style>' +
     'body{font-family:Google Sans,Arial,sans-serif;max-width:580px;margin:48px auto;padding:0 20px;color:#1f2937}' +
     'h1{color:#1B4332;font-size:22px;margin-bottom:4px}' +
-    'p.sub{color:#6b7280;font-size:13px;margin:0 0 20px;line-height:1.5}' +
-    'label{display:block;font-size:13px;font-weight:600;margin:16px 0 4px}' +
+    'p.sub{color:#6b7280;font-size:13px;margin:0 0 16px;line-height:1.5}' +
+    'label{display:block;font-size:13px;font-weight:600;margin:12px 0 4px}' +
     'span.light{font-weight:400;color:#6b7280}' +
     'input,select{width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;color:#111827;background:#fff}' +
     'button{margin-top:16px;background:#1B4332;color:#fff;border:none;padding:11px 24px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;width:100%}' +
@@ -276,13 +371,14 @@ function getFormHtml_(connected) {
     '.pill{font-size:13px;padding:8px 12px;border-radius:6px;margin-bottom:20px}' +
     '.pill.ok{color:#166534;background:#f0fdf4;border:1px solid #bbf7d0}' +
     '.pill.warn{color:#92400e;background:#fffbeb;border:1px solid #fde68a}' +
+    '.pill a{color:inherit;font-weight:700}' +
     '#result a{color:#1B4332;font-weight:700;font-size:15px;text-decoration:none}' +
     '#result a:hover{text-decoration:underline}' +
     '.meta{font-size:12px;color:#6b7280;margin-top:6px}' +
     '</style></head><body>' +
     '<h1>Email Copy Template Generator</h1>' +
     '<p class="sub">Paste a Wrike brief link to generate a pre-filled email copy doc.</p>' +
-    banner +
+    wrikeStatus + settings +
     '<label>Wrike Brief URL</label>' +
     '<input id="wrikeUrl" type="url" placeholder="https://www.wrike.com/open.htm?id=..." />' +
     '<label>Template <span class="light">(auto-detected, or override)</span></label>' +
@@ -292,6 +388,25 @@ function getFormHtml_(connected) {
     '<div id="result" style="display:none;margin-top:14px;padding:14px 16px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px"></div>' +
     '<p id="errMsg" style="color:#b91c1c;margin-top:12px;font-size:14px;min-height:16px"></p>' +
     '<script>' +
+    'function showSettings(){document.getElementById("settings").style.display="block";}' +
+    'function saveFolder(){' +
+    '  var url=document.getElementById("folderUrl").value.trim();' +
+    '  if(!url){alert("Please paste a Wrike folder URL.");return;}' +
+    '  document.getElementById("saveBtn").disabled=true;' +
+    '  document.getElementById("saveStatus").textContent="Resolving folder in Wrike... this takes about 20-30 seconds.";' +
+    '  google.script.run' +
+    '    .withSuccessHandler(function(r){' +
+    '      document.getElementById("saveBtn").disabled=false;' +
+    '      if(r.error){document.getElementById("saveStatus").textContent="Error: "+r.error;return;}' +
+    '      document.getElementById("saveStatus").textContent="Folder saved! You can now generate docs.";' +
+    '      document.getElementById("settings").style.display="none";' +
+    '    })' +
+    '    .withFailureHandler(function(e){' +
+    '      document.getElementById("saveBtn").disabled=false;' +
+    '      document.getElementById("saveStatus").textContent="Error: "+e.message;' +
+    '    })' +
+    '    .saveBriefFolder(url);' +
+    '}' +
     'function generate(){' +
     '  var url=document.getElementById("wrikeUrl").value.trim();' +
     '  var tmpl=document.getElementById("templateType").value;' +
