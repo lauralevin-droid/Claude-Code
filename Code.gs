@@ -1,12 +1,12 @@
 /**
  * Thrive Market Email Copy Template Generator
  *
- * Setup (one-time, in the Apps Script editor):
- *   1. In Wrike: profile avatar -> Apps & Integrations -> API -> Create new token
- *   2. In the Apps Script editor console, run:
- *        setWrikeToken("paste-your-token-here")
- *   3. Deploy as Web App (Execute as: Me, Who has access: Anyone within Thrive Market)
- *   4. Open the Web App URL and start generating docs
+ * Setup (one-time):
+ *   1. Open the web app URL
+ *   2. Click "Connect Wrike" and enter your Client ID + Client Secret
+ *      (from Wrike -> profile -> Apps & Integrations -> open one of your apps)
+ *   3. Click Authorize -- approve in the popup
+ *   4. You're done. Start pasting Wrike brief links.
  */
 
 // - Template IDs (Google Doc IDs) -
@@ -21,16 +21,7 @@ var TEMPLATES = {
 
 var WRIKE_API_BASE = 'https://www.wrike.com/api/v4';
 
-// - Token management -
-
-/**
- * Store your Wrike permanent API token. Run this once from the Apps Script editor:
- *   setWrikeToken("your-token-here")
- */
-function setWrikeToken(token) {
-  PropertiesService.getScriptProperties().setProperty('WRIKE_TOKEN', token.trim());
-  return 'Wrike token saved.';
-}
+// - Token helpers -
 
 function hasWrikeToken() {
   return !!PropertiesService.getScriptProperties().getProperty('WRIKE_TOKEN');
@@ -38,17 +29,122 @@ function hasWrikeToken() {
 
 function getWrikeToken_() {
   var token = PropertiesService.getScriptProperties().getProperty('WRIKE_TOKEN');
-  if (!token) throw new Error('Wrike token not set. Run setWrikeToken("your-token") in the editor.');
+  if (!token) throw new Error('Wrike not connected. Open the Settings panel and authorize.');
   return token;
+}
+
+function saveWrikeToken_(token) {
+  PropertiesService.getScriptProperties().setProperty('WRIKE_TOKEN', token);
 }
 
 // - Web App entry point -
 
-function doGet() {
-  var html = getFormHtml(hasWrikeToken());
+function doGet(e) {
+  // OAuth callback from Wrike: ?code=...&state=wrike_oauth
+  if (e && e.parameter && e.parameter.code && e.parameter.state === 'wrike_oauth') {
+    return handleOAuthCallback_(e.parameter.code);
+  }
+  var html = getFormHtml_(hasWrikeToken());
   return HtmlService.createHtmlOutput(html)
     .setTitle('Thrive Market Email Copy Template Generator')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+// - OAuth flow -
+
+function handleOAuthCallback_(code) {
+  var props        = PropertiesService.getScriptProperties();
+  var clientId     = props.getProperty('WRIKE_CLIENT_ID')     || '';
+  var clientSecret = props.getProperty('WRIKE_CLIENT_SECRET') || '';
+  var redirectUri  = ScriptApp.getService().getUrl();
+
+  var resp;
+  try {
+    resp = UrlFetchApp.fetch('https://login.wrike.com/oauth2/token', {
+      method: 'post',
+      muteHttpExceptions: true,
+      payload: {
+        client_id:     clientId,
+        client_secret: clientSecret,
+        grant_type:    'authorization_code',
+        code:          code,
+        redirect_uri:  redirectUri,
+      },
+    });
+  } catch (err) {
+    return simplePage_('Connection failed', '<p class="err">Network error: ' + err.message + '</p>');
+  }
+
+  var data;
+  try { data = JSON.parse(resp.getContentText()); } catch (_) { data = {}; }
+
+  if (!data.access_token) {
+    return simplePage_('Connection failed',
+      '<p class="err">Wrike error: ' + (data.error_description || data.error || resp.getContentText().slice(0,200)) + '</p>' +
+      '<p><a href="' + ScriptApp.getService().getUrl() + '">&larr; Try again</a></p>');
+  }
+
+  saveWrikeToken_(data.access_token);
+  if (data.refresh_token) props.setProperty('WRIKE_REFRESH_TOKEN', data.refresh_token);
+
+  return simplePage_('Wrike connected!',
+    '<p class="ok">Authorization successful. You can close this tab.</p>' +
+    '<p><a href="' + ScriptApp.getService().getUrl() + '">&larr; Open the generator</a></p>');
+}
+
+// Called from the UI to save credentials and get the auth URL
+function saveCredentialsAndGetAuthUrl(clientId, clientSecret) {
+  if (!clientId || !clientSecret) return { error: 'Both Client ID and Client Secret are required.' };
+
+  var redirectUri = ScriptApp.getService().getUrl();
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('WRIKE_CLIENT_ID',    clientId.trim());
+  props.setProperty('WRIKE_CLIENT_SECRET', clientSecret.trim());
+
+  var authUrl = 'https://login.wrike.com/oauth2/authorize' +
+    '?client_id='     + encodeURIComponent(clientId.trim()) +
+    '&response_type=code' +
+    '&redirect_uri='  + encodeURIComponent(redirectUri) +
+    '&scope=Default' +
+    '&state=wrike_oauth';
+
+  return { authUrl: authUrl, redirectUri: redirectUri };
+}
+
+// Called from the UI on page load so the redirect URI can be displayed
+function getRedirectUri() {
+  return ScriptApp.getService().getUrl();
+}
+
+// Token refresh (called automatically on 401)
+function refreshWrikeToken_() {
+  var props        = PropertiesService.getScriptProperties();
+  var refreshToken = props.getProperty('WRIKE_REFRESH_TOKEN') || '';
+  var clientId     = props.getProperty('WRIKE_CLIENT_ID')     || '';
+  var clientSecret = props.getProperty('WRIKE_CLIENT_SECRET') || '';
+  if (!refreshToken || !clientId || !clientSecret) return false;
+
+  var resp;
+  try {
+    resp = UrlFetchApp.fetch('https://login.wrike.com/oauth2/token', {
+      method: 'post',
+      muteHttpExceptions: true,
+      payload: {
+        client_id:     clientId,
+        client_secret: clientSecret,
+        grant_type:    'refresh_token',
+        refresh_token: refreshToken,
+      },
+    });
+  } catch (_) { return false; }
+
+  var data;
+  try { data = JSON.parse(resp.getContentText()); } catch (_) { return false; }
+  if (!data.access_token) return false;
+
+  saveWrikeToken_(data.access_token);
+  if (data.refresh_token) props.setProperty('WRIKE_REFRESH_TOKEN', data.refresh_token);
+  return true;
 }
 
 // - Main form handler -
@@ -59,7 +155,7 @@ function processForm(form) {
 
   if (!wrikeUrl) return { error: 'Please paste a Wrike brief URL.' };
   if (wrikeUrl.indexOf('wrike.com') === -1) return { error: 'Please enter a valid Wrike URL.' };
-  if (!hasWrikeToken()) return { error: 'Wrike token not configured. Run setWrikeToken() in the Apps Script editor.' };
+  if (!hasWrikeToken()) return { error: 'Wrike not connected. Open Settings and authorize.' };
 
   var brief = fetchWrikeBrief_(wrikeUrl);
   if (brief.error) return { error: brief.error };
@@ -89,27 +185,14 @@ function processForm(form) {
 
 // - Wrike API: fast permalink lookup -
 
-/**
- * Resolve a Wrike URL to a task object in 1-3 API calls:
- *   1. GET /tasks?permalink=URL        (tasks in shared spaces)
- *   2. GET /tasks?permalink=URL-raw    (unencoded fallback)
- *   3. GET /folders?permalink=URL      (briefs stored as projects/folders)
- * Then fetches full task data (description, customFields) by alphanumeric ID.
- */
 function fetchWrikeBrief_(wrikeUrl) {
-  var url = wrikeUrl.trim();
-
-  // Fast path: resolve permalink to alphanumeric task/folder ID
+  var url      = wrikeUrl.trim();
   var resolved = resolvePermalink_(url);
   if (!resolved) {
     return { error: 'Could not find that brief in Wrike. Make sure you copied the correct task link.' };
   }
 
-  var taskId   = resolved.id;
-  var isFolder = !!resolved._isFolder;
-
-  // Fetch full data with description and custom fields
-  var task = fetchFullItem_(taskId, isFolder);
+  var task = fetchFullItem_(resolved.id, !!resolved._isFolder);
   if (!task) {
     return { error: 'Found the task in Wrike but could not load its details. Try again.' };
   }
@@ -117,27 +200,20 @@ function fetchWrikeBrief_(wrikeUrl) {
   return extractBriefFromTask_(task, url);
 }
 
-/**
- * Try permalink lookup via tasks endpoint, then folders endpoint.
- * Returns a minimal object with { id, title, _isFolder } or null.
- */
 function resolvePermalink_(wrikeUrl) {
-  var encoded = encodeURIComponent(wrikeUrl);
+  var encoded    = encodeURIComponent(wrikeUrl);
   var rawEncoded = wrikeUrl.replace(/&/g, '%26');
 
-  // Try 1: /tasks?permalink= (encoded)
   try {
     var d1 = wrikeFetch_('/tasks?permalink=' + encoded);
     if (d1.data && d1.data[0]) return d1.data[0];
   } catch (e1) { /* fall through */ }
 
-  // Try 2: /tasks?permalink= (raw, some Wrike setups prefer this)
   try {
     var d2 = wrikeFetch_('/tasks?permalink=' + rawEncoded);
     if (d2.data && d2.data[0]) return d2.data[0];
   } catch (e2) { /* fall through */ }
 
-  // Try 3: /folders?permalink= (briefs are often Wrike projects/folders)
   try {
     var d3 = wrikeFetch_('/folders?permalink=' + encoded);
     if (d3.data && d3.data[0]) {
@@ -150,58 +226,50 @@ function resolvePermalink_(wrikeUrl) {
   return null;
 }
 
-/**
- * Fetch full item data (description, customFields).
- * Tries progressively simpler field lists if the plan restricts certain fields.
- */
 function fetchFullItem_(itemId, isFolder) {
-  var baseEndpoint = isFolder ? '/folders/' : '/tasks/';
-  var fieldAttempts = [
-    ['description', 'customFields'],
-    ['customFields'],
-    [],
-  ];
+  var base     = isFolder ? '/folders/' : '/tasks/';
+  var attempts = [['description', 'customFields'], ['customFields'], []];
 
-  for (var i = 0; i < fieldAttempts.length; i++) {
+  for (var i = 0; i < attempts.length; i++) {
     try {
-      var ep = baseEndpoint + itemId;
-      if (fieldAttempts[i].length > 0) {
-        ep += '?fields=' + encodeURIComponent(JSON.stringify(fieldAttempts[i]));
-      }
+      var ep   = base + itemId;
+      if (attempts[i].length) ep += '?fields=' + encodeURIComponent(JSON.stringify(attempts[i]));
       var data = wrikeFetch_(ep);
       if (data.data && data.data[0]) return data.data[0];
     } catch (e) {
-      // Only retry on 400 (field not supported); rethrow other errors
       if (!e.message || e.message.indexOf('400') === -1) throw e;
     }
   }
 
-  // If task endpoint returned nothing, try folder endpoint as fallback
   if (!isFolder) {
     try {
       var fd = wrikeFetch_('/folders/' + itemId);
       if (fd.data && fd.data[0]) return fd.data[0];
-    } catch (e2) { /* ignore */ }
+    } catch (_) {}
   }
 
   return null;
 }
 
-/**
- * Low-level: fetch a Wrike API endpoint and return parsed JSON.
- * Throws on non-200 responses.
- */
 function wrikeFetch_(endpoint) {
   var token = getWrikeToken_();
   var resp  = UrlFetchApp.fetch(WRIKE_API_BASE + endpoint, {
-    method:             'GET',
-    headers:            { 'Authorization': 'Bearer ' + token },
+    method: 'GET',
+    headers: { 'Authorization': 'Bearer ' + token },
     muteHttpExceptions: true,
   });
   var code = resp.getResponseCode();
-  if (code !== 200) {
-    throw new Error('Wrike API ' + code + ': ' + resp.getContentText().slice(0, 200));
+  if (code === 401) {
+    if (!refreshWrikeToken_()) throw new Error('Wrike session expired. Re-authorize in Settings.');
+    token = getWrikeToken_();
+    resp  = UrlFetchApp.fetch(WRIKE_API_BASE + endpoint, {
+      method: 'GET',
+      headers: { 'Authorization': 'Bearer ' + token },
+      muteHttpExceptions: true,
+    });
+    code = resp.getResponseCode();
   }
+  if (code !== 200) throw new Error('Wrike API ' + code + ': ' + resp.getContentText().slice(0, 200));
   return JSON.parse(resp.getContentText());
 }
 
@@ -234,14 +302,11 @@ function stripHtml_(html) {
 }
 
 function parseDatesFromTitle_(title) {
-  // "06.07" or "6/7" or "6.7" style dates in title
   var m = title.match(/\b(\d{1,2})[./](\d{1,2})\b/);
   if (!m) return '';
   var months = ['January','February','March','April','May','June',
                 'July','August','September','October','November','December'];
-  var month = parseInt(m[1], 10);
-  var day   = parseInt(m[2], 10);
-  return (months[month - 1] || '') + ' ' + day;
+  return (months[parseInt(m[1],10) - 1] || '') + ' ' + parseInt(m[2], 10);
 }
 
 function parseDatesFromDescription_(desc) {
@@ -278,7 +343,7 @@ function detectTemplateType_(title, description) {
 }
 
 function fillTemplate_(doc, brief) {
-  var body = doc.getBody();
+  var body  = doc.getBody();
   var pairs = [
     ['[DATE]',        brief.dates      || '[DATE]'],
     ['{{DATE}}',      brief.dates      || '[DATE]'],
@@ -298,50 +363,102 @@ function escapeRegex_(str) {
   return str.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
 }
 
+// - Utility -
+
+function simplePage_(title, body) {
+  return HtmlService.createHtmlOutput(
+    '<html><head><meta charset="utf-8"><style>' +
+    'body{font-family:Google Sans,sans-serif;max-width:520px;margin:60px auto;padding:0 20px;color:#1f2937}' +
+    'h2{color:#1B4332}' +
+    '.ok{color:#166534;background:#f0fdf4;border:1px solid #bbf7d0;padding:12px 16px;border-radius:8px}' +
+    '.err{color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;padding:12px 16px;border-radius:8px}' +
+    'a{color:#1B4332;font-weight:600}' +
+    '</style></head><body><h2>' + title + '</h2>' + body + '</body></html>'
+  ).setTitle(title);
+}
+
 // - HTML UI -
 
-function getFormHtml(connected) {
+function getFormHtml_(connected) {
   var templateOptions = Object.keys(TEMPLATES).map(function(k) {
     return '<option value="' + k + '">' + TEMPLATES[k].label + '</option>';
   }).join('');
 
   var banner = connected
-    ? '<div class="pill ok">Wrike connected</div>'
-    : '<div class="pill warn">Wrike token not set &mdash; run <code>setWrikeToken("...")</code> in the Apps Script editor, then redeploy.</div>';
+    ? '<div class="pill ok">Wrike connected &nbsp;&middot;&nbsp; <a href="#" onclick="showSettings();return false;">re-authorize</a></div>'
+    : '<div class="pill warn">Wrike not connected &mdash; <a href="#" onclick="showSettings();return false;">connect now</a></div>';
+
+  var settings =
+    '<div id="settings" style="display:' + (connected ? 'none' : 'block') + ';background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:24px">' +
+    '<h2 style="margin:0 0 12px">Connect Wrike</h2>' +
+    '<p class="sub">In Wrike: <strong>profile avatar &rarr; Apps &amp; Integrations</strong> &rarr; open one of your apps &rarr; copy the <strong>Client ID</strong> and <strong>Client Secret</strong>.</p>' +
+    '<p style="font-size:13px;font-weight:600;margin:0 0 4px">Step 1 &mdash; Add this Redirect URI to your Wrike app (before clicking Authorize):</p>' +
+    '<div id="uriDisplay" style="font-size:12px;background:#f3f4f6;border:1px solid #d1d5db;padding:8px 10px;border-radius:6px;word-break:break-all;margin-bottom:4px;color:#111827;font-family:monospace">Loading...</div>' +
+    '<p style="font-size:11px;color:#6b7280;margin:0 0 14px">In your Wrike app settings &rarr; Redirect URIs &rarr; paste that URL &rarr; Save.</p>' +
+    '<p style="font-size:13px;font-weight:600;margin:0 0 4px">Step 2 &mdash; Enter your app credentials:</p>' +
+    '<label>Client ID</label><input id="clientId" type="text" placeholder="Paste Client ID..." />' +
+    '<label>Client Secret</label><input id="clientSecret" type="password" placeholder="Paste Client Secret..." />' +
+    '<button id="authBtn" onclick="authorize()">Authorize with Wrike &rarr;</button>' +
+    '<p id="authStatus" style="font-size:13px;margin-top:10px;color:#374151"></p>' +
+    '</div>';
 
   var form =
+    '<div id="main" style="display:' + (connected ? 'block' : 'none') + '">' +
     '<label>Wrike Brief URL</label>' +
     '<input id="wrikeUrl" type="url" placeholder="https://www.wrike.com/open.htm?id=..." />' +
-    '<label>Template <span class="light">(auto-detected, or override)</span></label>' +
+    '<label>Template <span style="font-weight:400;color:#6b7280">(auto-detected, or override)</span></label>' +
     '<select id="templateType"><option value="auto">Auto-detect from brief</option>' + templateOptions + '</select>' +
     '<button id="btn" onclick="generate()">Generate Copy Doc &rarr;</button>' +
     '<p id="status" style="margin-top:18px;font-size:14px;color:#374151;min-height:20px"></p>' +
     '<div id="result" style="display:none;margin-top:14px;padding:14px 16px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px"></div>' +
-    '<p id="errMsg" style="color:#b91c1c;margin-top:12px;font-size:14px;min-height:16px"></p>';
+    '<p id="errMsg" style="color:#b91c1c;margin-top:12px;font-size:14px;min-height:16px"></p>' +
+    '</div>';
 
   return '<!DOCTYPE html><html><head><meta charset="utf-8">' +
     '<title>Thrive Market Email Copy Template Generator</title>' +
     '<style>' +
     'body{font-family:Google Sans,Arial,sans-serif;max-width:580px;margin:48px auto;padding:0 20px;color:#1f2937}' +
     'h1{color:#1B4332;font-size:22px;margin-bottom:4px}' +
-    'p.sub{color:#6b7280;font-size:13px;margin:0 0 20px;line-height:1.5}' +
-    '.light{font-weight:400;color:#6b7280}' +
-    'label{display:block;font-size:13px;font-weight:600;margin:16px 0 4px}' +
+    'h2{font-size:16px;font-weight:700;color:#1B4332}' +
+    'p.sub{color:#6b7280;font-size:13px;margin:0 0 16px;line-height:1.5}' +
+    'label{display:block;font-size:13px;font-weight:600;margin:12px 0 4px}' +
     'input,select{width:100%;box-sizing:border-box;padding:9px 11px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;color:#111827;background:#fff}' +
     'button{margin-top:16px;background:#1B4332;color:#fff;border:none;padding:11px 24px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;width:100%}' +
     'button:disabled{opacity:.5;cursor:default}' +
     '.pill{font-size:13px;padding:8px 12px;border-radius:6px;margin-bottom:20px}' +
     '.pill.ok{color:#166534;background:#f0fdf4;border:1px solid #bbf7d0}' +
     '.pill.warn{color:#92400e;background:#fffbeb;border:1px solid #fde68a}' +
-    'code{font-size:12px;background:#f3f4f6;padding:1px 4px;border-radius:3px}' +
+    '.pill a,.pill.ok a{color:inherit;font-weight:700}' +
     '#result a{color:#1B4332;font-weight:700;font-size:15px;text-decoration:none}' +
     '#result a:hover{text-decoration:underline}' +
     '.meta{font-size:12px;color:#6b7280;margin-top:6px}' +
     '</style></head><body>' +
     '<h1>Email Copy Template Generator</h1>' +
     '<p class="sub">Paste a Wrike brief link to generate a pre-filled email copy doc.</p>' +
-    banner + form +
+    banner + settings + form +
     '<script>' +
+    'google.script.run.withSuccessHandler(function(uri){' +
+    '  var el=document.getElementById("uriDisplay");if(el)el.textContent=uri;' +
+    '}).getRedirectUri();' +
+    'function showSettings(){document.getElementById("settings").style.display="block";}' +
+    'function authorize(){' +
+    '  var id=document.getElementById("clientId").value.trim();' +
+    '  var secret=document.getElementById("clientSecret").value.trim();' +
+    '  if(!id||!secret){alert("Enter both Client ID and Client Secret.");return;}' +
+    '  document.getElementById("authBtn").disabled=true;' +
+    '  document.getElementById("authStatus").textContent="Saving credentials...";' +
+    '  google.script.run' +
+    '    .withSuccessHandler(function(r){' +
+    '      if(r.error){document.getElementById("authStatus").innerHTML="Error: "+esc(r.error);document.getElementById("authBtn").disabled=false;return;}' +
+    '      document.getElementById("authStatus").textContent="Redirecting to Wrike...";' +
+    '      window.top.location.href=r.authUrl;' +
+    '    })' +
+    '    .withFailureHandler(function(e){' +
+    '      document.getElementById("authStatus").textContent="Error: "+e.message;' +
+    '      document.getElementById("authBtn").disabled=false;' +
+    '    })' +
+    '    .saveCredentialsAndGetAuthUrl(id,secret);' +
+    '}' +
     'function generate(){' +
     '  var url=document.getElementById("wrikeUrl").value.trim();' +
     '  var tmpl=document.getElementById("templateType").value;' +
@@ -360,7 +477,7 @@ function getFormHtml(connected) {
     '        "<a href=\'"+r.url+"\' target=\'_blank\'>Open: "+esc(r.name)+" &rarr;</a>"' +
     '        +"<div class=\'meta\'>Template: "+esc(r.templateUsed)+"</div>"' +
     '        +(r.briefData&&r.briefData.dates?"<div class=\'meta\'>Date: "+esc(r.briefData.dates)+"</div>":"")' +
-    '        +(r.briefData&&r.briefData.promoFocus?"<div class=\'meta\'>Promo focus: "+esc(r.briefData.promoFocus)+"</div>":"");' +
+    '        +(r.briefData&&r.briefData.promoFocus?"<div class=\'meta\'>Promo: "+esc(r.briefData.promoFocus)+"</div>":"");' +
     '      d.style.display="block";' +
     '    })' +
     '    .withFailureHandler(function(e){' +
