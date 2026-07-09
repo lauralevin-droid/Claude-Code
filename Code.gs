@@ -70,21 +70,33 @@ function getCachedFolderId_() {
 /**
  * Resolve a Wrike URL containing a numeric ID (e.g. open.htm?id=594378430)
  * to the alphanumeric folder/task ID used by the REST API.
- * Searches all spaces until found; caches the result.
+ *
+ * Strategy: /spaces/{id}/folders returns all folder IDs (no permalink).
+ * Batch those IDs 50 at a time via /folders/ID1,ID2,... which returns
+ * permalink by default, then match against the target.
  */
 function resolveNumericUrlToId_(url) {
   var m = url.match(/[?&#]id=(\d+)/);
   if (!m) return null;
   var targetPermalink = 'https://www.wrike.com/open.htm?id=' + m[1];
 
-  // Must explicitly request the permalink field -- Wrike omits it by default
-  var fields = '?fields=' + encodeURIComponent('["permalink"]');
-
   var spaces = (wrikeFetch_('/spaces').data || []);
-  for (var i = 0; i < spaces.length; i++) {
-    var folders = (wrikeFetch_('/spaces/' + spaces[i].id + '/folders' + fields).data || []);
-    for (var j = 0; j < folders.length; j++) {
-      if (folders[j].permalink === targetPermalink) return folders[j].id;
+  for (var s = 0; s < spaces.length; s++) {
+    // No fields param here -- adding it breaks Brand Creative (returns 0 folders)
+    var folders = (wrikeFetch_('/spaces/' + spaces[s].id + '/folders').data || []);
+    var ids = folders.map(function(f) { return f.id; });
+
+    // Batch check 50 IDs at a time; /folders/ID1,ID2,... returns permalink by default
+    for (var i = 0; i < ids.length; i += 50) {
+      var batch = ids.slice(i, i + 50).join(',');
+      try {
+        var result = wrikeFetch_('/folders/' + batch).data || [];
+        for (var j = 0; j < result.length; j++) {
+          if (result[j].permalink === targetPermalink) return result[j].id;
+        }
+      } catch (e) {
+        // Skip batches that error and keep going
+      }
     }
   }
   return null;
@@ -163,14 +175,13 @@ function fetchWrikeBrief_(wrikeUrl) {
  * Search for an item with the given permalink within a folder.
  * Checks: direct child folders, direct child tasks,
  *         then grandchild folders and tasks (one level deeper).
+ *
+ * Note: /folders/{id}/folders returns permalink by default -- no fields param needed.
  */
 function findByPermalinkInFolder_(folderId, targetPermalink) {
-  // Must request permalink explicitly -- Wrike omits it by default on list endpoints
-  var pFields  = '?fields=' + encodeURIComponent('["permalink"]');
-
-  // Level 1: direct child folders
+  // Level 1: direct child folders (permalink returned by default)
   var childFolders = [];
-  try { childFolders = wrikeFetch_('/folders/' + folderId + '/folders' + pFields).data || []; } catch (_) {}
+  try { childFolders = wrikeFetch_('/folders/' + folderId + '/folders').data || []; } catch (_) {}
 
   for (var i = 0; i < childFolders.length; i++) {
     if (childFolders[i].permalink === targetPermalink) {
@@ -180,7 +191,7 @@ function findByPermalinkInFolder_(folderId, targetPermalink) {
 
   // Level 1: direct child tasks
   var childTasks = [];
-  try { childTasks = wrikeFetch_('/folders/' + folderId + '/tasks' + pFields).data || []; } catch (_) {}
+  try { childTasks = wrikeFetch_('/folders/' + folderId + '/tasks').data || []; } catch (_) {}
 
   for (var i = 0; i < childTasks.length; i++) {
     if (childTasks[i].permalink === targetPermalink) {
@@ -191,7 +202,7 @@ function findByPermalinkInFolder_(folderId, targetPermalink) {
   // Level 2: grandchild folders and tasks (brief inside a month folder)
   for (var i = 0; i < childFolders.length; i++) {
     var grandFolders = [];
-    try { grandFolders = wrikeFetch_('/folders/' + childFolders[i].id + '/folders' + pFields).data || []; } catch (_) {}
+    try { grandFolders = wrikeFetch_('/folders/' + childFolders[i].id + '/folders').data || []; } catch (_) {}
 
     for (var j = 0; j < grandFolders.length; j++) {
       if (grandFolders[j].permalink === targetPermalink) {
@@ -200,7 +211,7 @@ function findByPermalinkInFolder_(folderId, targetPermalink) {
     }
 
     var grandTasks = [];
-    try { grandTasks = wrikeFetch_('/folders/' + childFolders[i].id + '/tasks' + pFields).data || []; } catch (_) {}
+    try { grandTasks = wrikeFetch_('/folders/' + childFolders[i].id + '/tasks').data || []; } catch (_) {}
 
     for (var j = 0; j < grandTasks.length; j++) {
       if (grandTasks[j].permalink === targetPermalink) {
