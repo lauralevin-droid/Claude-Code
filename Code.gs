@@ -43,24 +43,32 @@ function getBriefFolderUrl() {
 }
 
 /**
- * Save the brief folder URL and resolve its alphanumeric Wrike ID.
- * The ID resolution traverses all spaces (slow, ~20-40s) but only runs once.
- * The result is cached in script properties for all future lookups.
+ * Save the brief folder. Accepts either:
+ *   (a) A Wrike folder URL  (https://www.wrike.com/open.htm?id=...)
+ *   (b) An alphanumeric Wrike folder ID (e.g. IEADZYVOI46XHRTX)
+ *
+ * For (b), the ID is saved immediately. This is the recommended path --
+ * run setupBriefFolderFromUrl() in the Script Editor to find your ID first.
  */
-function saveBriefFolder(folderUrl) {
-  folderUrl = (folderUrl || '').trim();
-  if (!folderUrl) return { error: 'Please paste a Wrike folder URL.' };
+function saveBriefFolder(input) {
+  input = (input || '').trim();
+  if (!input) return { error: 'Please paste a Wrike folder URL or ID.' };
 
-  PropertiesService.getScriptProperties().setProperty('BRIEF_FOLDER_URL', folderUrl);
-  PropertiesService.getScriptProperties().deleteProperty('BRIEF_FOLDER_ID');
-
-  var folderId = resolveNumericUrlToId_(folderUrl);
-  if (!folderId) {
-    return { error: 'Could not find that folder in Wrike. Make sure you right-clicked the folder -> Copy link.' };
+  // If it looks like an alphanumeric Wrike ID, save it directly
+  if (/^[A-Z0-9]{10,}$/.test(input)) {
+    PropertiesService.getScriptProperties().setProperty('BRIEF_FOLDER_ID', input);
+    PropertiesService.getScriptProperties().setProperty('BRIEF_FOLDER_URL', input);
+    return { ok: true };
   }
 
-  PropertiesService.getScriptProperties().setProperty('BRIEF_FOLDER_ID', folderId);
-  return { ok: true };
+  PropertiesService.getScriptProperties().setProperty('BRIEF_FOLDER_URL', input);
+  PropertiesService.getScriptProperties().deleteProperty('BRIEF_FOLDER_ID');
+
+  return {
+    error: 'Could not auto-resolve that URL. Run setupBriefFolderFromUrl() in the ' +
+           'Apps Script editor with your folder URL to find and save the folder ID. ' +
+           'See Code.gs setup instructions for details.'
+  };
 }
 
 function getCachedFolderId_() {
@@ -68,38 +76,82 @@ function getCachedFolderId_() {
 }
 
 /**
- * Resolve a Wrike URL containing a numeric ID (e.g. open.htm?id=594378430)
- * to the alphanumeric folder/task ID used by the REST API.
+ * ONE-TIME SETUP: Run this function in the Apps Script editor (not the web app).
+ * It finds the alphanumeric Wrike ID for your brief folder and saves it.
  *
- * Strategy: /spaces/{id}/folders returns all folder IDs (no permalink).
- * Batch those IDs 50 at a time via /folders/ID1,ID2,... which returns
- * permalink by default, then match against the target.
+ * How to run:
+ *   1. Paste your Wrike folder URL as the argument below (replace the placeholder)
+ *   2. Click the Run button in the Apps Script editor
+ *   3. Check the Execution Log -- it will print the found ID and save it automatically
+ *   4. After this runs successfully, the web app will work for all future brief lookups
+ *
+ * Example: setupBriefFolderFromUrl('https://www.wrike.com/open.htm?id=819530475')
  */
-function resolveNumericUrlToId_(url) {
-  var m = url.match(/[?&#]id=(\d+)/);
-  if (!m) return null;
+function setupBriefFolderFromUrl(folderUrl) {
+  folderUrl = (folderUrl || '').trim();
+  if (!folderUrl) {
+    Logger.log('ERROR: Pass your folder URL as the argument, e.g.:');
+    Logger.log('  setupBriefFolderFromUrl("https://www.wrike.com/open.htm?id=819530475")');
+    return;
+  }
+
+  var m = folderUrl.match(/[?&#]id=(\d+)/);
+  if (!m) {
+    Logger.log('ERROR: URL does not contain a numeric id parameter.');
+    return;
+  }
   var targetPermalink = 'https://www.wrike.com/open.htm?id=' + m[1];
+  Logger.log('Searching for: ' + targetPermalink);
 
-  var spaces = (wrikeFetch_('/spaces').data || []);
+  var spaces = wrikeFetch_('/spaces').data || [];
+  Logger.log('Found ' + spaces.length + ' spaces. Checking each...');
+
   for (var s = 0; s < spaces.length; s++) {
-    // No fields param here -- adding it breaks Brand Creative (returns 0 folders)
-    var folders = (wrikeFetch_('/spaces/' + spaces[s].id + '/folders').data || []);
-    var ids = folders.map(function(f) { return f.id; });
+    var spaceName = spaces[s].title || spaces[s].id;
+    Logger.log('Checking space: ' + spaceName);
 
-    // Batch check 50 IDs at a time; /folders/ID1,ID2,... returns permalink by default
-    for (var i = 0; i < ids.length; i += 50) {
-      var batch = ids.slice(i, i + 50).join(',');
+    // Get all folders in this space (no fields param -- adding it breaks some spaces)
+    var allFolders = wrikeFetch_('/spaces/' + spaces[s].id + '/folders').data || [];
+    Logger.log('  ' + allFolders.length + ' folders. Batch-checking permalinks...');
+
+    // Check in batches of 100 using the multi-get endpoint
+    for (var i = 0; i < allFolders.length; i += 100) {
+      var batch = allFolders.slice(i, i + 100).map(function(f) { return f.id; }).join(',');
       try {
         var result = wrikeFetch_('/folders/' + batch).data || [];
         for (var j = 0; j < result.length; j++) {
-          if (result[j].permalink === targetPermalink) return result[j].id;
+          if (result[j].permalink === targetPermalink) {
+            var foundId = result[j].id;
+            var foundTitle = result[j].title;
+            Logger.log('FOUND: "' + foundTitle + '" ID=' + foundId);
+            PropertiesService.getScriptProperties().setProperty('BRIEF_FOLDER_ID', foundId);
+            PropertiesService.getScriptProperties().setProperty('BRIEF_FOLDER_URL', folderUrl);
+            Logger.log('Saved to script properties. Setup complete!');
+            return foundId;
+          }
         }
       } catch (e) {
-        // Skip batches that error and keep going
+        Logger.log('  Batch error at index ' + i + ': ' + e.message.slice(0, 80));
       }
     }
   }
-  return null;
+
+  Logger.log('NOT FOUND in any space. The folder may use a different URL format.');
+  Logger.log('Try: setupBriefFolderById("YOUR_ALPHANUMERIC_ID") if you know the API ID.');
+}
+
+/**
+ * Alternative one-time setup: use if you already know the alphanumeric Wrike folder ID.
+ * Run in the Apps Script editor:  setupBriefFolderById('IEADZYVOI46XHRTX')
+ */
+function setupBriefFolderById(alphanumericId) {
+  alphanumericId = (alphanumericId || '').trim();
+  if (!alphanumericId) {
+    Logger.log('ERROR: Pass the alphanumeric folder ID as the argument.');
+    return;
+  }
+  PropertiesService.getScriptProperties().setProperty('BRIEF_FOLDER_ID', alphanumericId);
+  Logger.log('Saved folder ID: ' + alphanumericId + '. Setup complete!');
 }
 
 // - Web App entry point -
@@ -367,10 +419,12 @@ function getFormHtml_(connected, savedFolderUrl) {
   var settings =
     '<div id="settings" style="display:' + (folderSaved ? 'none' : 'block') + ';background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:20px;margin-bottom:24px">' +
     '<h2 style="margin:0 0 8px;font-size:15px;color:#1B4332">Settings</h2>' +
-    '<p class="sub">Right-click the Wrike folder that contains your email briefs &rarr; Copy link &rarr; paste below. This only needs to be done once.</p>' +
-    '<label>Brief Folder URL</label>' +
-    '<input id="folderUrl" type="url" value="' + (savedFolderUrl || '') + '" placeholder="https://www.wrike.com/open.htm?id=..." />' +
-    '<button id="saveBtn" onclick="saveFolder()">Save Folder (takes ~20-30 seconds)</button>' +
+    '<p class="sub"><strong>One-time setup required.</strong> To link your Wrike brief folder, do one of the following:</p>' +
+    '<p class="sub" style="margin-top:-8px"><strong>Option A (recommended):</strong> In the Apps Script editor, run <code>setupBriefFolderFromUrl("YOUR_WRIKE_FOLDER_URL")</code>. This takes 1-3 minutes and auto-saves your folder.</p>' +
+    '<p class="sub" style="margin-top:-8px"><strong>Option B:</strong> Paste your folder\'s alphanumeric Wrike ID below (looks like IEADZYVOI46XHRTX). You can find it by running <code>setupBriefFolderFromUrl()</code> in the editor first.</p>' +
+    '<label>Alphanumeric Wrike Folder ID</label>' +
+    '<input id="folderUrl" type="text" value="' + (savedFolderUrl || '') + '" placeholder="e.g. IEADZYVOI46XHRTX" />' +
+    '<button id="saveBtn" onclick="saveFolder()">Save Folder ID</button>' +
     '<p id="saveStatus" style="font-size:13px;margin-top:10px;color:#374151;min-height:16px"></p>' +
     '</div>';
 
