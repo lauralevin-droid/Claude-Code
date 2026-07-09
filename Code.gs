@@ -77,7 +77,7 @@ function resolveNumericUrlToId_(url) {
   if (!m) return null;
   var targetPermalink = 'https://www.wrike.com/open.htm?id=' + m[1];
 
-  // Must explicitly request the permalink field — Wrike omits it by default
+  // Must explicitly request the permalink field -- Wrike omits it by default
   var fields = '?fields=' + encodeURIComponent('["permalink"]');
 
   var spaces = (wrikeFetch_('/spaces').data || []);
@@ -165,7 +165,7 @@ function fetchWrikeBrief_(wrikeUrl) {
  *         then grandchild folders and tasks (one level deeper).
  */
 function findByPermalinkInFolder_(folderId, targetPermalink) {
-  // Must request permalink explicitly — Wrike omits it by default on list endpoints
+  // Must request permalink explicitly -- Wrike omits it by default on list endpoints
   var pFields  = '?fields=' + encodeURIComponent('["permalink"]');
 
   // Level 1: direct child folders
