@@ -224,14 +224,19 @@ function fetchWrikeBrief_(wrikeUrl) {
 }
 
 /**
- * Search for an item with the given permalink within a folder.
- * Checks: direct child folders, direct child tasks,
- *         then grandchild folders and tasks (one level deeper).
- *
- * Note: /folders/{id}/folders returns permalink by default -- no fields param needed.
+ * Recursively search for an item matching targetPermalink within folderId.
+ * Searches child folders (permalink returned by default on this endpoint) and
+ * child tasks (permalink NOT returned by default -- must request via fields param).
+ * Goes up to maxDepth levels deep.
  */
 function findByPermalinkInFolder_(folderId, targetPermalink) {
-  // Level 1: direct child folders (permalink returned by default)
+  return searchFolder_(folderId, targetPermalink, 4);
+}
+
+function searchFolder_(folderId, targetPermalink, maxDepth) {
+  if (maxDepth <= 0) return null;
+
+  // Child folders -- permalink included by default on /folders/{id}/folders
   var childFolders = [];
   try { childFolders = wrikeFetch_('/folders/' + folderId + '/folders').data || []; } catch (_) {}
 
@@ -241,9 +246,10 @@ function findByPermalinkInFolder_(folderId, targetPermalink) {
     }
   }
 
-  // Level 1: direct child tasks
+  // Child tasks -- must request permalink explicitly
+  var taskFields = '?fields=' + encodeURIComponent('["permalink"]');
   var childTasks = [];
-  try { childTasks = wrikeFetch_('/folders/' + folderId + '/tasks').data || []; } catch (_) {}
+  try { childTasks = wrikeFetch_('/folders/' + folderId + '/tasks' + taskFields).data || []; } catch (_) {}
 
   for (var i = 0; i < childTasks.length; i++) {
     if (childTasks[i].permalink === targetPermalink) {
@@ -251,25 +257,10 @@ function findByPermalinkInFolder_(folderId, targetPermalink) {
     }
   }
 
-  // Level 2: grandchild folders and tasks (brief inside a month folder)
+  // Recurse into child folders
   for (var i = 0; i < childFolders.length; i++) {
-    var grandFolders = [];
-    try { grandFolders = wrikeFetch_('/folders/' + childFolders[i].id + '/folders').data || []; } catch (_) {}
-
-    for (var j = 0; j < grandFolders.length; j++) {
-      if (grandFolders[j].permalink === targetPermalink) {
-        return fetchFullItem_(grandFolders[j].id, true);
-      }
-    }
-
-    var grandTasks = [];
-    try { grandTasks = wrikeFetch_('/folders/' + childFolders[i].id + '/tasks').data || []; } catch (_) {}
-
-    for (var j = 0; j < grandTasks.length; j++) {
-      if (grandTasks[j].permalink === targetPermalink) {
-        return fetchFullItem_(grandTasks[j].id, false);
-      }
-    }
+    var found = searchFolder_(childFolders[i].id, targetPermalink, maxDepth - 1);
+    if (found) return found;
   }
 
   return null;
